@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id              Int               @id @default(autoincrement())
+  name            String            @unique
+  address         String?
+  users           User[]
+  shifts          Shift[]
+  donations       Donation[]
+  categories      DonationCategory[]
+  shiftCategories ShiftCategory[]
+  recurringShifts RecurringShift[]
+  donors          Donor[]
+}
+
+model User {
+  id             Int           @id @default(autoincrement())
+  email          String        @unique
+  phone          String?       @unique
+  password       String
+  firstName      String
+  lastName       String
+  role           UserRole      @default(VOLUNTEER)
+  organizationId Int
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  shiftSignups   ShiftSignup[]
+  resetToken     String?
+  resetTokenExpiry DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+enum UserRole {
+  VOLUNTEER
+  STAFF
+  ADMIN
+}
+
+model ShiftCategory {
+  id             Int             @id @default(autoincrement())
+  name           String
+  icon           String?
+  organizationId Int
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  shifts         Shift[]
+  recurringShifts RecurringShift[]
+
+  @@unique([name, organizationId])
+}
+
+model Shift {
+  id             Int           @id @default(autoincrement())
+  name           String
+  shiftCategoryId Int
+  shiftCategory  ShiftCategory  @relation(fields: [shiftCategoryId], references: [id])
+  startTime      DateTime
+  endTime        DateTime
+  location       String
+  slots          Int
+  organizationId Int
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  shiftSignups   ShiftSignup[]
+  donations      Donation[]
+}
+
+model ShiftSignup {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  shiftId      Int
+  user         User      @relation(fields: [userId], references: [id])
+  shift        Shift     @relation(fields: [shiftId], references: [id])
+  checkIn      DateTime?
+  checkOut     DateTime?
+  mealsServed  Int?
+  donations    Donation[]
+  createdAt    DateTime  @default(now())
+}
+
+model Donor {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  location    String?
+  contactInfo String?
+  donations   Donation[]
+  kitchenId   Int
+  kitchen     Organization @relation(fields: [kitchenId], references: [id])
+}
+
+model Donation {
+  id             Int             @id @default(autoincrement())
+  shiftId        Int
+  organizationId Int
+  donorId        Int
+  shiftSignupId  Int?
+  summary        Float
+  createdAt      DateTime        @default(now())
+  shift          Shift           @relation(fields: [shiftId], references: [id])
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  donor          Donor           @relation(fields: [donorId], references: [id])
+  shiftSignup    ShiftSignup?    @relation(fields: [shiftSignupId], references: [id])
+  items          DonationItem[]
+}
+
+model DonationCategory {
+  id             Int             @id @default(autoincrement())
+  name           String
+  icon           String?
+  organizationId Int
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  items          DonationItem[]
+}
+
+model DonationItem {
+  id                Int              @id @default(autoincrement())
+  donationId        Int
+  categoryId        Int
+  weightKg          Float
+  donation          Donation         @relation(fields: [donationId], references: [id])
+  category          DonationCategory @relation(fields: [categoryId], references: [id])
+}
+
+model RecurringShift {
+  id             Int           @id @default(autoincrement())
+  name           String
+  dayOfWeek      Int           // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  startTime      DateTime      // Time of day (e.g., 07:00:00)
+  endTime        DateTime      // Time of day (e.g., 09:00:00)
+  shiftCategoryId Int
+  shiftCategory  ShiftCategory @relation(fields: [shiftCategoryId], references: [id])
+  location       String
+  slots          Int
+  organizationId Int
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+}
