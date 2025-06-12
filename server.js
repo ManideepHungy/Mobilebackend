@@ -6,12 +6,35 @@ const { PrismaClient } = require('./generated/prisma');
 require('dotenv').config();
 
 const app = express();
-const prisma = new PrismaClient();
+// Initialize Prisma with correct options
+const prisma = new PrismaClient({
+  log: ['query', 'error', 'warn'],
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL
+    }
+  }
+});
+
+// Add connection error handling
+prisma.$on('query', (e) => {
+  console.log('Query:', e.query);
+  console.log('Duration:', e.duration, 'ms');
+});
+
+prisma.$on('error', (e) => {
+  console.error('Prisma Error:', e);
+});
+
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:4000';
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // Register endpoint
@@ -49,6 +72,38 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ token, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId } });
   } catch (err) {
     res.status(500).json({ error: 'Login failed', details: err.message });
+  }
+});
+
+// Get user by ID endpoint
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        organization: {
+          select: {
+            name: true
+          }
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Remove sensitive data
+    const { password, resetToken, resetTokenExpiry, ...userData } = user;
+    res.json(userData);
+  } catch (err) {
+    console.error('Error fetching user:', err);
+    res.status(500).json({ error: 'Failed to fetch user data', details: err.message });
   }
 });
 
@@ -156,10 +211,28 @@ app.post('/api/auth/change-password', async (req, res) => {
 // Get all organizations
 app.get('/api/organizations', async (req, res) => {
   try {
-    const orgs = await prisma.organization.findMany({ select: { id: true, name: true } });
+    console.log('Attempting to fetch organizations...');
+    console.log('Database URL:', process.env.DATABASE_URL ? 'URL exists' : 'URL missing');
+    
+    const orgs = await prisma.organization.findMany({ 
+      select: { id: true, name: true }
+    });
+    
+    console.log('Organizations fetched:', orgs);
     res.json(orgs);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch organizations' });
+    console.error('Error fetching organizations:', err);
+    console.error('Error stack:', err.stack);
+    
+    // Handle specific Prisma errors
+    if (err.code === 'P1001') {
+      return res.status(503).json({ error: 'Database connection timeout', details: err.message });
+    }
+    if (err.code === 'P1002') {
+      return res.status(503).json({ error: 'Database connection error', details: err.message });
+    }
+    
+    res.status(500).json({ error: 'Failed to fetch organizations', details: err.message });
   }
 });
 
@@ -589,6 +662,7 @@ app.get('/api/donation-categories', async (req, res) => {
 app.post('/api/donations', async (req, res) => {
   try {
     const { shiftId, donorId, entries, shiftSignupId } = req.body;
+    console.log('Donations request:', { shiftId, donorId, entries, shiftSignupId });
     if (!shiftId || !donorId || !Array.isArray(entries) || entries.length === 0) {
       return res.status(400).json({ error: 'shiftId, donorId, and entries are required' });
     }
@@ -669,7 +743,7 @@ app.post('/api/collection-shift/start', async (req, res) => {
 
     // Find the 'Collection' shift category for this org
     const collectionCategory = await prisma.shiftCategory.findFirst({
-      where: { name: 'Collection', organizationId: parseInt(organizationId) },
+      where: { name: 'Collections', organizationId: parseInt(organizationId) },
     });
     if (!collectionCategory) return res.status(404).json({ error: 'Collection category not found for this organization' });
 
@@ -1066,6 +1140,47 @@ app.get('/api/admin/meals-count-entries', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// Get all donations for a shift, with donor and category info (for summary modal)
+app.get('/api/donations/by-shift', async (req, res) => {
+  try {
+    const { shiftId, shiftSignupId } = req.query;
+    if (!shiftId) return res.status(400).json({ error: 'shiftId is required' });
+
+    const where = { shiftId: parseInt(shiftId) };
+    if (shiftSignupId) where.shiftSignupId = parseInt(shiftSignupId);
+
+    const donations = await prisma.donation.findMany({
+      where,
+      include: {
+        donor: true,
+        items: { include: { category: true } }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    // Flatten for frontend: one entry per donor/category/weight
+    const result = [];
+    for (const donation of donations) {
+      for (const item of donation.items) {
+        result.push({
+          donorName: donation.donor.name,
+          categoryName: item.category.name,
+          weightKg: item.weightKg,
+          createdAt: donation.createdAt
+        });
+      }
+    }
+    console.log('Donations result:', result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch donations', details: err.message });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Server accessible at:`);
+  console.log(`- http://localhost:${PORT}`);
+  console.log(`- http://127.0.0.1:${PORT}`);
+  console.log(`- http://172.20.10.2:${PORT}`);  // Your computer's IP
 }); 
