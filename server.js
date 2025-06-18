@@ -107,6 +107,34 @@ app.get('/api/users/:id', async (req, res) => {
   }
 });
 
+// Update user email endpoint
+app.put('/api/users/:id/email', async (req, res) => {
+  const userId = parseInt(req.params.id);
+  const { email } = req.body;
+  if (!email || isNaN(userId)) {
+    return res.status(400).json({ error: 'Valid user ID and email are required' });
+  }
+  // Basic email format validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+  try {
+    // Check if email already exists for another user
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing && existing.id !== userId) {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: { email },
+    });
+    res.json({ message: 'Email updated successfully', email: updated.email });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update email', details: err.message });
+  }
+});
+
 // Forgot password endpoint
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
@@ -655,6 +683,34 @@ app.get('/api/donation-categories', async (req, res) => {
     res.json(categories);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch donation categories', details: err.message });
+  }
+});
+
+// Add new donation category for an organization
+app.post('/api/donation-categories', async (req, res) => {
+  const { name, icon, organizationId } = req.body;
+  if (!name || !icon || !organizationId) {
+    return res.status(400).json({ error: 'name, icon, and organizationId are required' });
+  }
+  try {
+    // Check for uniqueness within the organization
+    const existing = await prisma.donationCategory.findFirst({
+      where: { name, organizationId: parseInt(organizationId) },
+    });
+    if (existing) {
+      return res.status(409).json({ error: 'Category with this name already exists for this organization' });
+    }
+    const category = await prisma.donationCategory.create({
+      data: {
+        name,
+        icon,
+        organizationId: parseInt(organizationId),
+      },
+      select: { id: true, name: true, icon: true },
+    });
+    res.status(201).json(category);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create donation category', details: err.message });
   }
 });
 
