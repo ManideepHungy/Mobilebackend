@@ -242,6 +242,52 @@ async function main() {
     console.log('Seeded admin user: raj@gmail.com / raj');
   }
 
+  // Seed volunteer users for org1
+  const volunteerUsers = [
+    {
+      email: 'volunteer1@gmail.com',
+      password: 'volunteer1',
+      firstName: 'John',
+      lastName: 'Volunteer',
+      role: 'VOLUNTEER',
+      organizationId: org1.id,
+    },
+    {
+      email: 'volunteer2@gmail.com',
+      password: 'volunteer2',
+      firstName: 'Jane',
+      lastName: 'Helper',
+      role: 'VOLUNTEER',
+      organizationId: org1.id,
+    },
+    {
+      email: 'volunteer3@gmail.com',
+      password: 'volunteer3',
+      firstName: 'Mike',
+      lastName: 'Support',
+      role: 'VOLUNTEER',
+      organizationId: org1.id,
+    }
+  ];
+
+  for (const userData of volunteerUsers) {
+    const existingUser = await prisma.user.findUnique({ where: { email: userData.email } });
+    if (!existingUser) {
+      const hashedPassword = await bcrypt.hash(userData.password, 10);
+      await prisma.user.create({
+        data: {
+          email: userData.email,
+          password: hashedPassword,
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          role: userData.role,
+          organizationId: userData.organizationId,
+        },
+      });
+      console.log(`Seeded volunteer user: ${userData.email} / ${userData.password}`);
+    }
+  }
+
   console.log('Seed data created!');
 }
 

@@ -670,6 +670,50 @@ app.get('/api/donors', async (req, res) => {
   }
 });
 
+// Create new donor
+app.post('/api/donors', async (req, res) => {
+  try {
+    const { name, location, contactInfo, kitchenId } = req.body;
+    
+    if (!name || !kitchenId) {
+      return res.status(400).json({ error: 'name and kitchenId are required' });
+    }
+
+    // Check if donor with same name already exists
+    const existingDonor = await prisma.donor.findUnique({
+      where: { name },
+    });
+    
+    if (existingDonor) {
+      return res.status(409).json({ error: 'A donor with this name already exists' });
+    }
+
+    // Verify the kitchen/organization exists
+    const organization = await prisma.organization.findUnique({
+      where: { id: parseInt(kitchenId) },
+    });
+    
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const donor = await prisma.donor.create({
+      data: {
+        name,
+        location: location || null,
+        contactInfo: contactInfo || null,
+        kitchenId: parseInt(kitchenId),
+      },
+      select: { id: true, name: true, location: true, contactInfo: true, kitchenId: true },
+    });
+
+    res.status(201).json(donor);
+  } catch (err) {
+    console.error('Error creating donor:', err);
+    res.status(500).json({ error: 'Failed to create donor', details: err.message });
+  }
+});
+
 // Get all donation categories for a kitchen/organization
 app.get('/api/donation-categories', async (req, res) => {
   try {
@@ -799,7 +843,7 @@ app.post('/api/collection-shift/start', async (req, res) => {
 
     // Find the 'Collection' shift category for this org
     const collectionCategory = await prisma.shiftCategory.findFirst({
-      where: { name: 'Collections', organizationId: parseInt(organizationId) },
+      where: { name: 'Collection', organizationId: parseInt(organizationId) },
     });
     if (!collectionCategory) return res.status(404).json({ error: 'Collection category not found for this organization' });
 
@@ -814,6 +858,7 @@ app.post('/api/collection-shift/start', async (req, res) => {
         startTime: { gte: startOfDay, lte: endOfDay },
       },
     });
+    console.log('Collection shift lookup result:', shift);
     if (!shift) {
       // Create a new shift for today (default time: now to now+2h, slots: 100)
       const now = new Date();
@@ -855,7 +900,7 @@ app.get('/api/admin/org-users', async (req, res) => {
     const users = await prisma.user.findMany({
       where: {
         organizationId: parseInt(organizationId),
-        role: { not: 'VOLUNTEER' },
+        // role: { not: 'VOLUNTEER' },
       },
       select: { id: true, firstName: true, lastName: true, email: true, role: true },
       orderBy: { firstName: 'asc' },
@@ -1193,6 +1238,35 @@ app.get('/api/admin/meals-count-entries', async (req, res) => {
     })));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch meal count entries', details: err.message });
+  }
+});
+
+// ADMIN: Edit a meal count entry (update mealsServed)
+app.patch('/api/admin/meals-count-entry/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { mealsServed } = req.body;
+    if (!mealsServed || isNaN(mealsServed)) {
+      return res.status(400).json({ error: 'mealsServed is required and must be a number' });
+    }
+    const updated = await prisma.shiftSignup.update({
+      where: { id: parseInt(id) },
+      data: { mealsServed: parseInt(mealsServed) },
+    });
+    res.json({ id: updated.id, mealsServed: updated.mealsServed, createdAt: updated.createdAt });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update meal count entry', details: err.message });
+  }
+});
+
+// ADMIN: Delete a meal count entry
+app.delete('/api/admin/meals-count-entry/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.shiftSignup.delete({ where: { id: parseInt(id) } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete meal count entry', details: err.message });
   }
 });
 
