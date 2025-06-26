@@ -373,22 +373,22 @@ app.get('/api/shifts', async (req, res) => {
       for (const template of recurringTemplates) {
         if (template.dayOfWeek === dayOfWeek) {
           // Set start and end time for this date
-          const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), new Date(template.startTime).getUTCHours(), new Date(template.startTime).getUTCMinutes()));
-          const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), new Date(template.endTime).getUTCHours(), new Date(template.endTime).getUTCMinutes()));
+          const shiftStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), new Date(template.startTime).getUTCHours(), new Date(template.startTime).getUTCMinutes()));
+          const shiftEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), new Date(template.endTime).getUTCHours(), new Date(template.endTime).getUTCMinutes()));
 
           // Check if a real shift instance exists for this date/template
           const realShift = shifts.find(s =>
             s.name === template.name &&
             s.shiftCategoryId === template.shiftCategoryId &&
             s.organizationId === template.organizationId &&
-            s.startTime.getTime() === start.getTime()
+            s.startTime.getTime() === shiftStart.getTime()
           );
 
           if (!realShift) {
             virtualShifts.push({
               id: `recurring-${template.id}-${d.toISOString().slice(0, 10)}`,
               name: template.name,
-              time: `${formatTime(start)}–${formatTime(end)}`,
+              time: `${formatTime(shiftStart)}–${formatTime(shiftEnd)}`,
               location: template.organization.name,
               slots: template.slots,
               icon: getShiftIcon(template.shiftCategory.name, template.name),
@@ -451,17 +451,14 @@ app.post('/api/shift-signup', async (req, res) => {
       if (!template) return res.status(404).json({ error: 'Recurring shift not found' });
       
       // Check if a real shift already exists for this date/template
-      const start = parseUTCDate(shiftDate);
-      start.setUTCHours(new Date(template.startTime).getUTCHours(), new Date(template.startTime).getUTCMinutes(), 0, 0);
-      const end = parseUTCDate(shiftDate);
-      end.setUTCHours(new Date(template.endTime).getUTCHours(), new Date(template.endTime).getUTCMinutes(), 0, 0);
+      const shiftStart = new Date(date + 'T' + template.startTime.toISOString().substr(11, 8));
+      const shiftEnd = new Date(date + 'T' + template.endTime.toISOString().substr(11, 8));
       
       let realShift = await prisma.shift.findFirst({
         where: {
           name: template.name,
           shiftCategoryId: template.shiftCategoryId,
-          organizationId: template.organizationId,
-          startTime: start,
+          organizationId: template.organizationId
         },
         include: {
           shiftSignups: true
@@ -474,8 +471,8 @@ app.post('/api/shift-signup', async (req, res) => {
           data: {
             name: template.name,
             shiftCategoryId: template.shiftCategoryId,
-            startTime: start,
-            endTime: end,
+            startTime: shiftStart,
+            endTime: shiftEnd,
             location: template.location,
             slots: template.slots,
             organizationId: template.organizationId,
@@ -990,45 +987,72 @@ app.get('/api/admin/shifts', async (req, res) => {
   }
 });
 
-// ADMIN: Check in a user for a shift (by userId, date, category, organizationId)
-app.post('/api/admin/checkin', async (req, res) => {
+// Get recurring shifts for an org/category (no dayOfWeek filter)
+app.get('/api/recurring-shifts', async (req, res) => {
   try {
-    let { userId, date, category, organizationId } = req.body;
-    if (!userId || !date || !category || !organizationId) {
-      return res.status(400).json({ error: 'userId, date, category, and organizationId are required' });
+    const { organizationId, category } = req.query;
+    if (!organizationId || !category) {
+      return res.status(400).json({ error: 'organizationId and category are required' });
     }
-    // Find the shiftCategoryId
     const shiftCategory = await prisma.shiftCategory.findFirst({
       where: { name: category, organizationId: parseInt(organizationId) },
     });
     if (!shiftCategory) return res.status(404).json({ error: 'Category not found' });
-    // Find or create the real shift for this date/category/org
-    const start = new Date(date + 'T00:00:00Z');
-    const end = new Date(date + 'T23:59:59Z');
-    let realShift = await prisma.shift.findFirst({
+    const recShifts = await prisma.recurringShift.findMany({
       where: {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
-        startTime: { gte: start, lte: end },
       },
+      orderBy: { startTime: 'asc' },
     });
-    if (!realShift) {
-      // Create a new shift for this date/category/org (default time: 9am-5pm, slots: 100)
-      const shiftStart = new Date(date + 'T09:00:00Z');
-      const shiftEnd = new Date(date + 'T17:00:00Z');
-      realShift = await prisma.shift.create({
-        data: {
-          name: shiftCategory.name,
-          shiftCategoryId: shiftCategory.id,
+    res.json(recShifts);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch recurring shifts', details: err.message });
+  }
+});
+
+// ADMIN: Check in a user for a shift (by userId, date, category, organizationId, [recurringShiftId])
+app.post('/api/admin/checkin', async (req, res) => {
+  try {
+    let { userId, date, category, organizationId, recurringShiftId } = req.body;
+    if (!userId || !date || !category || !organizationId) {
+      return res.status(400).json({ error: 'userId, date, category, and organizationId are required' });
+    }
+    let realShift = null;
+    if (recurringShiftId) {
+      // 1. Get the recurring shift template
+      const template = await prisma.recurringShift.findUnique({ where: { id: parseInt(recurringShiftId) } });
+      if (!template) return res.status(404).json({ error: 'Recurring shift not found' });
+      // 2. Compute start/end time for the selected date
+      const shiftStart = new Date(date + 'T' + template.startTime.toISOString().substr(11, 8));
+      const shiftEnd = new Date(date + 'T' + template.endTime.toISOString().substr(11, 8));
+      // 3. Look for a real shift in the Shift table
+      realShift = await prisma.shift.findFirst({
+        where: {
+          shiftCategoryId: template.shiftCategoryId,
+          organizationId: template.organizationId,
           startTime: shiftStart,
-          endTime: shiftEnd,
-          location: 'Default',
-          slots: 100,
-          organizationId: parseInt(organizationId),
         },
       });
+      // 4. If not found, create it
+      if (!realShift) {
+        realShift = await prisma.shift.create({
+          data: {
+            name: template.name,
+            shiftCategoryId: template.shiftCategoryId,
+            startTime: shiftStart,
+            endTime: shiftEnd,
+            location: template.location,
+            slots: template.slots,
+            organizationId: template.organizationId,
+          },
+        });
+      }
+    } else {
+      // Fallback: do NOT allow check-in if no recurring shift is selected
+      return res.status(400).json({ error: 'No recurring shift selected. Please select a shift template.' });
     }
-    // Find or create the signup for this user/shift
+    // 5. Now use realShift.id for ShiftSignup
     let signup = await prisma.shiftSignup.findFirst({
       where: { userId: parseInt(userId), shiftId: realShift.id },
     });
