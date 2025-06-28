@@ -21,6 +21,7 @@ model Organization {
   shiftCategories       ShiftCategory[]
   users                 User[]
   WeighingCategory      WeighingCategory[]
+  termsAndConditions    TermsAndConditions[]
 }
 
 model User {
@@ -33,11 +34,19 @@ model User {
   createdAt        DateTime      @default(now())
   organizationId   Int
   role             UserRole      @default(VOLUNTEER)
+  status           UserStatus    @default(PENDING)
+  approvedBy       Int?
+  approvedAt       DateTime?
+  deniedBy         Int?
+  deniedAt         DateTime?
+  denialReason     String?
   resetToken       String?
   resetTokenExpiry DateTime?
   updatedAt        DateTime      @updatedAt
   shiftSignups     ShiftSignup[]
   organization     Organization  @relation(fields: [organizationId], references: [id])
+  modulePermissions UserModulePermission[]
+  agreements       UserAgreement[]
 }
 
 model ShiftCategory {
@@ -143,8 +152,7 @@ model WeighingCategory {
   kilogram_kg_   Float        @map("kilogram(kg)")
   pound_lb_      Float        @map("pound(lb)")
   category       String
-  noofmeals      Int          @default(0)
-  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([category, organizationId])
 }
@@ -153,4 +161,63 @@ enum UserRole {
   VOLUNTEER
   STAFF
   ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  APPROVED
+  DENIED
+}
+
+model Module {
+  id          Int    @id @default(autoincrement())
+  name        String @unique
+  description String?
+  permissions UserModulePermission[]
+}
+
+model UserModulePermission {
+  id             Int  @id @default(autoincrement())
+  userId         Int
+  organizationId Int
+  moduleId       Int
+  canAccess      Boolean @default(false)
+  user           User   @relation(fields: [userId], references: [id])
+  module         Module @relation(fields: [moduleId], references: [id])
+
+  @@unique([userId, organizationId, moduleId])
+}
+
+model TermsAndConditions {
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  version        String
+  title          String
+  fileUrl        String   // Cloudinary URL to original PDF/DOC
+  fileName       String   // Original filename
+  fileSize       Int      // File size in bytes
+  isActive       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  createdBy      Int?     // Admin who uploaded
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  agreements     UserAgreement[]
+
+  @@unique([organizationId, version])
+}
+
+model UserAgreement {
+  id                    Int      @id @default(autoincrement())
+  userId                Int
+  organizationId        Int
+  termsAndConditionsId  Int
+  signature             String   // Digital signature data
+  signedDocumentUrl     String?  // Cloudinary URL to signed PDF (if generated)
+  acceptedAt            DateTime @default(now())
+  ipAddress             String?  // User's IP address for audit
+  userAgent             String?  // User's browser info for audit
+  user                  User     @relation(fields: [userId], references: [id])
+  termsAndConditions    TermsAndConditions @relation(fields: [termsAndConditionsId], references: [id])
+
+  @@unique([userId, organizationId, termsAndConditionsId])
 }

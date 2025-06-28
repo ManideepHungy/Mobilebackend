@@ -10,6 +10,7 @@ async function main() {
     create: {
       name: 'Fredericton Community Kitchen',
       address: '123 Main St, Fredericton',
+      incoming_dollar_value: 10.0,
     },
   });
   const org2 = await prisma.organization.upsert({
@@ -18,8 +19,53 @@ async function main() {
     create: {
       name: 'Saint John Food Bank',
       address: '456 King St, Saint John',
+      incoming_dollar_value: 8.0,
     },
   });
+
+  // Create Modules
+  const modules = await Promise.all([
+    prisma.module.upsert({
+      where: { name: 'Meal Counting' },
+      update: {},
+      create: {
+        name: 'Meal Counting',
+        description: 'Track and manage meal counts for shifts',
+      },
+    }),
+    prisma.module.upsert({
+      where: { name: 'Donation Management' },
+      update: {},
+      create: {
+        name: 'Donation Management',
+        description: 'Manage donations and donor information',
+      },
+    }),
+    prisma.module.upsert({
+      where: { name: 'Shift Management' },
+      update: {},
+      create: {
+        name: 'Shift Management',
+        description: 'Create and manage shifts and recurring shifts',
+      },
+    }),
+    prisma.module.upsert({
+      where: { name: 'User Management' },
+      update: {},
+      create: {
+        name: 'User Management',
+        description: 'Manage users, roles, and permissions',
+      },
+    }),
+    prisma.module.upsert({
+      where: { name: 'Reports' },
+      update: {},
+      create: {
+        name: 'Reports',
+        description: 'Generate and view reports',
+      },
+    }),
+  ]);
 
   // Create or fetch Shift Categories for org1
   const mealProgram = await prisma.shiftCategory.upsert({
@@ -49,20 +95,27 @@ async function main() {
   });
 
   // Create Donation Categories for org1
-  const meat = await prisma.donationCategory.create({
-    data: { name: 'Meat & Fish', icon: '🐟', organizationId: org1.id },
+  await prisma.donationCategory.createMany({
+    data: [
+      { name: 'Meat & Fish', icon: '🐟', organizationId: org1.id },
+      { name: 'Bread Products', icon: '🍞', organizationId: org1.id },
+      { name: 'Produce', icon: '🥕', organizationId: org1.id },
+      { name: 'Dairy', icon: '🧀', organizationId: org1.id },
+      { name: 'Other', icon: '…', organizationId: org1.id },
+    ],
+    skipDuplicates: true,
   });
-  const grains = await prisma.donationCategory.create({
-    data: { name: 'Bread Products', icon: '🍞', organizationId: org1.id },
-  });
-  const veg = await prisma.donationCategory.create({
-    data: { name: 'Produce', icon: '🥕', organizationId: org1.id },
-  });
-  const dairy = await prisma.donationCategory.create({
-    data: { name: 'Dairy', icon: '🧀', organizationId: org1.id },
-  });
-  const other = await prisma.donationCategory.create({
-    data: { name: 'Other', icon: '…', organizationId: org1.id },
+
+  // Create Weighing Categories for org1
+  await prisma.weighingCategory.createMany({
+    data: [
+      { category: 'Backpack', kilogram_kg_: 5.0, pound_lb_: 11.0, organizationId: org1.id },
+      { category: 'Box', kilogram_kg_: 10.0, pound_lb_: 22.0, organizationId: org1.id },
+      { category: 'Bag', kilogram_kg_: 2.0, pound_lb_: 4.4, organizationId: org1.id },
+      { category: 'Tote', kilogram_kg_: 7.0, pound_lb_: 15.4, organizationId: org1.id },
+      { category: 'Crate', kilogram_kg_: 12.0, pound_lb_: 26.4, organizationId: org1.id },
+    ],
+    skipDuplicates: true,
   });
 
   // Create Donors
@@ -227,19 +280,25 @@ async function main() {
 
   // Seed admin user for org1
   const existingAdmin = await prisma.user.findUnique({ where: { email: 'raj@gmail.com' } });
+  let adminUser;
   if (!existingAdmin) {
     const hashedPassword = await bcrypt.hash('raj', 10);
-    await prisma.user.create({
+    adminUser = await prisma.user.create({
       data: {
         email: 'raj@gmail.com',
         password: hashedPassword,
         firstName: 'Raj',
         lastName: 'Admin',
         role: 'ADMIN',
+        status: 'APPROVED',
+        agreementAccepted: true,
+        agreementSignature: 'Raj Admin',
         organizationId: org1.id,
       },
     });
     console.log('Seeded admin user: raj@gmail.com / raj');
+  } else {
+    adminUser = existingAdmin;
   }
 
   // Seed volunteer users for org1
@@ -270,25 +329,131 @@ async function main() {
     }
   ];
 
+  const createdUsers = [];
   for (const userData of volunteerUsers) {
     const existingUser = await prisma.user.findUnique({ where: { email: userData.email } });
     if (!existingUser) {
       const hashedPassword = await bcrypt.hash(userData.password, 10);
-      await prisma.user.create({
+      const user = await prisma.user.create({
         data: {
           email: userData.email,
           password: hashedPassword,
           firstName: userData.firstName,
           lastName: userData.lastName,
           role: userData.role,
+          status: 'APPROVED',
+          agreementAccepted: true,
+          agreementSignature: `${userData.firstName} ${userData.lastName}`,
           organizationId: userData.organizationId,
         },
       });
+      createdUsers.push(user);
       console.log(`Seeded volunteer user: ${userData.email} / ${userData.password}`);
+    } else {
+      createdUsers.push(existingUser);
     }
   }
 
-  console.log('Seed data created!');
+  // Create module permissions for admin user (full access to all modules)
+  for (const module of modules) {
+    await prisma.userModulePermission.upsert({
+      where: {
+        userId_organizationId_moduleId: {
+          userId: adminUser.id,
+          organizationId: org1.id,
+          moduleId: module.id,
+        },
+      },
+      update: { canAccess: true },
+      create: {
+        userId: adminUser.id,
+        organizationId: org1.id,
+        moduleId: module.id,
+        canAccess: true,
+      },
+    });
+  }
+
+  // Create module permissions for volunteer users (limited access)
+  for (const user of createdUsers) {
+    // Volunteers get access to Meal Counting and Donation Management
+    const volunteerModules = modules.filter(m => 
+      m.name === 'Meal Counting' || m.name === 'Donation Management'
+    );
+    
+    for (const module of volunteerModules) {
+      await prisma.userModulePermission.upsert({
+        where: {
+          userId_organizationId_moduleId: {
+            userId: user.id,
+            organizationId: org1.id,
+            moduleId: module.id,
+          },
+        },
+        update: { canAccess: true },
+        create: {
+          userId: user.id,
+          organizationId: org1.id,
+          moduleId: module.id,
+          canAccess: true,
+        },
+      });
+    }
+  }
+
+  // Create sample Terms & Conditions for organizations
+  await prisma.termsAndConditions.createMany({
+    data: [
+      {
+        organizationId: org1.id,
+        version: '1.0',
+        title: 'Volunteer Agreement - Fredericton Community Kitchen',
+        fileUrl: 'https://res.cloudinary.com/demo/raw/upload/v1/sample_docs/volunteer_agreement_fredericton.pdf',
+        fileName: 'volunteer_agreement_fredericton.pdf',
+        fileSize: 245760, // 240KB
+        isActive: true,
+        createdBy: adminUser.id,
+      },
+      {
+        organizationId: org2.id,
+        version: '1.0',
+        title: 'Volunteer Agreement - Saint John Food Bank',
+        fileUrl: 'https://res.cloudinary.com/demo/raw/upload/v1/sample_docs/volunteer_agreement_saintjohn.pdf',
+        fileName: 'volunteer_agreement_saintjohn.pdf',
+        fileSize: 198400, // 194KB
+        isActive: true,
+        createdBy: adminUser.id,
+      },
+    ],
+    skipDuplicates: true,
+  });
+
+  // Get the created terms and conditions
+  const frederictonTerms = await prisma.termsAndConditions.findFirst({
+    where: { organizationId: org1.id, isActive: true }
+  });
+
+  // Create sample user agreements for volunteer users
+  if (frederictonTerms) {
+    await prisma.userAgreement.createMany({
+      data: createdUsers.map(user => ({
+        userId: user.id,
+        organizationId: org1.id,
+        termsAndConditionsId: frederictonTerms.id,
+        signature: `${user.firstName} ${user.lastName}`,
+        signedDocumentUrl: `https://res.cloudinary.com/demo/raw/upload/v1/signed_docs/${user.email}_signed_agreement.pdf`,
+        ipAddress: '192.168.1.100',
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  console.log('Seed data created successfully!');
+  console.log('Admin user: raj@gmail.com / raj');
+  console.log('Volunteer users: volunteer1@gmail.com / volunteer1, volunteer2@gmail.com / volunteer2, volunteer3@gmail.com / volunteer3');
+  console.log('Terms & Conditions: Created for both organizations');
+  console.log('User Agreements: Created for all volunteer users');
 }
 
 main()
