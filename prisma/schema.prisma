@@ -9,44 +9,44 @@ datasource db {
 }
 
 model Organization {
-  id                    Int                @id @default(autoincrement())
-  name                  String             @unique
+  id                    Int                  @id @default(autoincrement())
+  name                  String               @unique
   address               String?
-  incoming_dollar_value Float?             @default(10)
+  incoming_dollar_value Float?               @default(10)
   donations             Donation[]
   categories            DonationCategory[]
   donors                Donor[]
   recurringShifts       RecurringShift[]
   shifts                Shift[]
   shiftCategories       ShiftCategory[]
+  termsAndConditions    TermsAndConditions[]
   users                 User[]
   WeighingCategory      WeighingCategory[]
-  termsAndConditions    TermsAndConditions[]
 }
 
 model User {
-  id               Int           @id @default(autoincrement())
-  email            String        @unique
-  phone            String?       @unique
-  password         String
-  firstName        String
-  lastName         String
-  createdAt        DateTime      @default(now())
-  organizationId   Int
-  role             UserRole      @default(VOLUNTEER)
-  status           UserStatus    @default(PENDING)
-  approvedBy       Int?
-  approvedAt       DateTime?
-  deniedBy         Int?
-  deniedAt         DateTime?
-  denialReason     String?
-  resetToken       String?
-  resetTokenExpiry DateTime?
-  updatedAt        DateTime      @updatedAt
-  shiftSignups     ShiftSignup[]
-  organization     Organization  @relation(fields: [organizationId], references: [id])
+  id                Int                    @id @default(autoincrement())
+  email             String                 @unique
+  phone             String?                @unique
+  password          String
+  firstName         String
+  lastName          String
+  createdAt         DateTime               @default(now())
+  organizationId    Int
+  role              UserRole               @default(VOLUNTEER)
+  status            UserStatus             @default(PENDING)
+  approvedBy        Int?
+  approvedAt        DateTime?
+  deniedBy          Int?
+  deniedAt          DateTime?
+  denialReason      String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  updatedAt         DateTime               @updatedAt
+  shiftSignups      ShiftSignup[]
+  organization      Organization           @relation(fields: [organizationId], references: [id])
+  agreements        UserAgreement[]
   modulePermissions UserModulePermission[]
-  agreements       UserAgreement[]
 }
 
 model ShiftCategory {
@@ -157,6 +157,59 @@ model WeighingCategory {
   @@unique([category, organizationId])
 }
 
+model Module {
+  id          Int                    @id @default(autoincrement())
+  name        String                 @unique
+  description String?
+  permissions UserModulePermission[]
+}
+
+model UserModulePermission {
+  id             Int     @id @default(autoincrement())
+  userId         Int
+  organizationId Int
+  moduleId       Int
+  canAccess      Boolean @default(false)
+  module         Module  @relation(fields: [moduleId], references: [id])
+  user           User    @relation(fields: [userId], references: [id])
+
+  @@unique([userId, organizationId, moduleId])
+}
+
+model TermsAndConditions {
+  id             Int             @id @default(autoincrement())
+  organizationId Int
+  version        String
+  title          String
+  fileUrl        String
+  fileName       String
+  fileSize       Int
+  isActive       Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  createdBy      Int?
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  agreements     UserAgreement[]
+
+  @@unique([organizationId, version])
+}
+
+model UserAgreement {
+  id                   Int                @id @default(autoincrement())
+  userId               Int
+  organizationId       Int
+  termsAndConditionsId Int
+  signature            String
+  signedDocumentUrl    String?
+  acceptedAt           DateTime           @default(now())
+  ipAddress            String?
+  userAgent            String?
+  termsAndConditions   TermsAndConditions @relation(fields: [termsAndConditionsId], references: [id])
+  user                 User               @relation(fields: [userId], references: [id])
+
+  @@unique([userId, organizationId, termsAndConditionsId])
+}
+
 enum UserRole {
   VOLUNTEER
   STAFF
@@ -167,57 +220,4 @@ enum UserStatus {
   PENDING
   APPROVED
   DENIED
-}
-
-model Module {
-  id          Int    @id @default(autoincrement())
-  name        String @unique
-  description String?
-  permissions UserModulePermission[]
-}
-
-model UserModulePermission {
-  id             Int  @id @default(autoincrement())
-  userId         Int
-  organizationId Int
-  moduleId       Int
-  canAccess      Boolean @default(false)
-  user           User   @relation(fields: [userId], references: [id])
-  module         Module @relation(fields: [moduleId], references: [id])
-
-  @@unique([userId, organizationId, moduleId])
-}
-
-model TermsAndConditions {
-  id             Int      @id @default(autoincrement())
-  organizationId Int
-  version        String
-  title          String
-  fileUrl        String   // Cloudinary URL to original PDF/DOC
-  fileName       String   // Original filename
-  fileSize       Int      // File size in bytes
-  isActive       Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  createdBy      Int?     // Admin who uploaded
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  agreements     UserAgreement[]
-
-  @@unique([organizationId, version])
-}
-
-model UserAgreement {
-  id                    Int      @id @default(autoincrement())
-  userId                Int
-  organizationId        Int
-  termsAndConditionsId  Int
-  signature             String   // Digital signature data
-  signedDocumentUrl     String?  // Cloudinary URL to signed PDF (if generated)
-  acceptedAt            DateTime @default(now())
-  ipAddress             String?  // User's IP address for audit
-  userAgent             String?  // User's browser info for audit
-  user                  User     @relation(fields: [userId], references: [id])
-  termsAndConditions    TermsAndConditions @relation(fields: [termsAndConditionsId], references: [id])
-
-  @@unique([userId, organizationId, termsAndConditionsId])
 }
