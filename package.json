@@ -9,7 +9,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "prisma:seed": "node prisma/seed.js",
     "build": "prisma generate",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "npx nodemon server.js"
   },
   "keywords": [],
   "author": "",
@@ -19,11 +20,18 @@
     "prisma": "^6.8.2"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.839.0",
+    "@aws-sdk/s3-request-presigner": "^3.839.0",
     "@prisma/client": "^6.8.2",
+    "@types/luxon": "^3.6.2",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "luxon": "^3.6.1",
+    "multer": "^2.0.1",
+    "nodemailer": "^7.0.4",
+    "pdfkit": "^0.17.1"
   }
 }

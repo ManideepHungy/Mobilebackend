@@ -26,6 +26,14 @@ async function main() {
   // Create Modules
   const modules = await Promise.all([
     prisma.module.upsert({
+      where: { name: 'Donation Management' },
+      update: {},
+      create: {
+        name: 'Donation Management',
+        description: 'Manage donations and food collection',
+      },
+    }),
+    prisma.module.upsert({
       where: { name: 'Meal Counting' },
       update: {},
       create: {
@@ -34,11 +42,11 @@ async function main() {
       },
     }),
     prisma.module.upsert({
-      where: { name: 'Donation Management' },
+      where: { name: 'Volunteer Meals Counting' },
       update: {},
       create: {
-        name: 'Donation Management',
-        description: 'Manage donations and donor information',
+        name: 'Volunteer Meals Counting',
+        description: 'Volunteers can count meals during their shifts',
       },
     }),
     prisma.module.upsert({
@@ -46,7 +54,7 @@ async function main() {
       update: {},
       create: {
         name: 'Shift Management',
-        description: 'Create and manage shifts and recurring shifts',
+        description: 'Manage volunteer shifts and distribution',
       },
     }),
     prisma.module.upsert({
@@ -54,15 +62,7 @@ async function main() {
       update: {},
       create: {
         name: 'User Management',
-        description: 'Manage users, roles, and permissions',
-      },
-    }),
-    prisma.module.upsert({
-      where: { name: 'Reports' },
-      update: {},
-      create: {
-        name: 'Reports',
-        description: 'Generate and view reports',
+        description: 'Manage group check-ins and user permissions',
       },
     }),
   ]);
@@ -376,9 +376,9 @@ async function main() {
 
   // Create module permissions for volunteer users (limited access)
   for (const user of createdUsers) {
-    // Volunteers get access to Meal Counting and Donation Management
+    // Volunteers get access to Donation Management, Meal Counting, Volunteer Meals Counting, and Shift Management
     const volunteerModules = modules.filter(m => 
-      m.name === 'Meal Counting' || m.name === 'Donation Management'
+      m.name === 'Donation Management' || m.name === 'Meal Counting' || m.name === 'Volunteer Meals Counting' || m.name === 'Shift Management'
     );
     
     for (const module of volunteerModules) {
@@ -408,7 +408,7 @@ async function main() {
         organizationId: org1.id,
         version: '1.0',
         title: 'Volunteer Agreement - Fredericton Community Kitchen',
-        fileUrl: 'https://res.cloudinary.com/demo/raw/upload/v1/sample_docs/volunteer_agreement_fredericton.pdf',
+        fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
         fileName: 'volunteer_agreement_fredericton.pdf',
         fileSize: 245760, // 240KB
         isActive: true,
@@ -418,7 +418,7 @@ async function main() {
         organizationId: org2.id,
         version: '1.0',
         title: 'Volunteer Agreement - Saint John Food Bank',
-        fileUrl: 'https://res.cloudinary.com/demo/raw/upload/v1/sample_docs/volunteer_agreement_saintjohn.pdf',
+        fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
         fileName: 'volunteer_agreement_saintjohn.pdf',
         fileSize: 198400, // 194KB
         isActive: true,
@@ -441,7 +441,7 @@ async function main() {
         organizationId: org1.id,
         termsAndConditionsId: frederictonTerms.id,
         signature: `${user.firstName} ${user.lastName}`,
-        signedDocumentUrl: `https://res.cloudinary.com/demo/raw/upload/v1/signed_docs/${user.email}_signed_agreement.pdf`,
+        signedDocumentUrl: `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf`,
         ipAddress: '192.168.1.100',
         userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
       })),
