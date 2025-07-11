@@ -82,22 +82,33 @@ app.post('/api/auth/register-step2', async (req, res) => {
     password, 
     organizationId, 
     role, 
-    termsAndConditionsId, 
+    termsAndConditionsId, // For backward compatibility
+    termsAndConditionsIds, // New field for multiple documents
     signature 
   } = req.body;
 
-  if (!firstName || !lastName || !email || !password || !organizationId || !role || !termsAndConditionsId || !signature) {
+  // Support both single and multiple terms IDs
+  const termsIds = termsAndConditionsIds || [termsAndConditionsId];
+  
+  if (!firstName || !lastName || !email || !password || !organizationId || !role || !signature) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  if (!termsIds || termsIds.length === 0) {
+    return res.status(400).json({ error: 'At least one terms and conditions must be accepted' });
+  }
+
   try {
-    // Check if terms and conditions exist
-    const terms = await prisma.termsAndConditions.findUnique({
-      where: { id: termsAndConditionsId }
+    // Check if all terms and conditions exist
+    const terms = await prisma.termsAndConditions.findMany({
+      where: { 
+        id: { in: termsIds },
+        organizationId: organizationId
+      }
     });
 
-    if (!terms) {
-      return res.status(400).json({ error: 'Invalid terms and conditions' });
+    if (terms.length !== termsIds.length) {
+      return res.status(400).json({ error: 'One or more terms and conditions are invalid' });
     }
 
     // Hash password
@@ -172,9 +183,12 @@ app.post('/api/auth/register-step2', async (req, res) => {
       doc.text(`- Role: ${role}`);
       doc.moveDown();
       doc.text('Terms & Conditions:', { underline: true });
-      doc.text(`- Document: ${terms.title}`);
-      doc.text(`- Version: ${terms.version}`);
-      doc.text(`- Original URL: ${terms.fileUrl}`);
+      terms.forEach((term, index) => {
+        doc.text(`${index + 1}. Document: ${term.title}`);
+        doc.text(`   Version: ${term.version}`);
+        doc.text(`   Original URL: ${term.fileUrl}`);
+        doc.moveDown(0.5);
+      });
       doc.moveDown();
       doc.text(`Signed Date: ${new Date().toISOString()}`);
       doc.text(`IP Address: ${req.ip || 'unknown'}`);
@@ -184,7 +198,7 @@ app.post('/api/auth/register-step2', async (req, res) => {
       doc.moveDown();
       doc.fontSize(16).text(signature, { align: 'right' });
       doc.moveDown();
-      doc.fontSize(10).text('This document confirms that the above user has read and agreed to the terms and conditions.', { align: 'center' });
+      doc.fontSize(10).text('This document confirms that the above user has read and agreed to all the terms and conditions listed above.', { align: 'center' });
       doc.end();
       
       // Wait for PDF generation and upload to complete
@@ -195,18 +209,20 @@ app.post('/api/auth/register-step2', async (req, res) => {
       // Continue without the signed document URL
     }
 
-    // Create user agreement with the signed document URL
-    await prisma.userAgreement.create({
-      data: {
-        userId: user.id,
-        organizationId: organizationId,
-        termsAndConditionsId: termsAndConditionsId,
-        signature: signature,
-        signedDocumentUrl: signedDocumentUrl,
-        ipAddress: req.ip || 'unknown',
-        userAgent: req.get('User-Agent') || 'unknown',
-      }
-    });
+    // Create user agreement records for all accepted terms
+    for (const termId of termsIds) {
+      await prisma.userAgreement.create({
+        data: {
+          userId: user.id,
+          organizationId: organizationId,
+          termsAndConditionsId: termId,
+          signature: signature,
+          signedDocumentUrl: signedDocumentUrl,
+          ipAddress: req.ip || 'unknown',
+          userAgent: req.get('User-Agent') || 'unknown',
+        },
+      });
+    }
 
     // Send registration confirmation email to user
     try {
@@ -1370,6 +1386,69 @@ app.get('/api/admin/org-users', async (req, res) => {
   }
 });
 
+// ADMIN: Get users registered for shifts on a specific date and category
+app.get('/api/admin/registered-users', async (req, res) => {
+  try {
+    const { organizationId, date, category } = req.query;
+    if (!organizationId || !date || !category) {
+      return res.status(400).json({ error: 'organizationId, date, and category are required' });
+    }
+
+    // Find the shiftCategoryId
+    const shiftCategory = await prisma.shiftCategory.findFirst({
+      where: { name: category, organizationId: parseInt(organizationId) },
+    });
+    if (!shiftCategory) return res.status(404).json({ error: 'Category not found' });
+
+    // Find all real shifts for that date/category/org
+    const start = new Date(date + 'T00:00:00');
+    const end = new Date(date + 'T23:59:59');
+    
+    const realShifts = await prisma.shift.findMany({
+      where: {
+        shiftCategoryId: shiftCategory.id,
+        organizationId: parseInt(organizationId),
+        startTime: { gte: start, lte: end },
+      },
+    });
+
+    if (realShifts.length === 0) {
+      return res.json([]);
+    }
+
+    // Get all shift IDs for this date/category
+    const shiftIds = realShifts.map(shift => shift.id);
+
+    // Find all users who have signups for these shifts
+    const signups = await prisma.shiftSignup.findMany({
+      where: {
+        shiftId: { in: shiftIds },
+      },
+      include: {
+        user: {
+          select: { id: true, firstName: true, lastName: true, email: true, role: true },
+        },
+      },
+    });
+
+    // Extract unique users from signups
+    const userMap = new Map();
+    signups.forEach(signup => {
+      if (!userMap.has(signup.user.id)) {
+        userMap.set(signup.user.id, signup.user);
+      }
+    });
+
+    const users = Array.from(userMap.values()).sort((a, b) => 
+      a.firstName.localeCompare(b.firstName)
+    );
+
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch registered users', details: err.message });
+  }
+});
+
 // ADMIN: Get all shifts and signups for a date/category/org (with recurring logic)
 app.get('/api/admin/shifts', async (req, res) => {
   try {
@@ -1449,10 +1528,10 @@ app.get('/api/admin/shifts', async (req, res) => {
   }
 });
 
-// Get recurring shifts for an org/category (no dayOfWeek filter)
+// Get recurring shifts for an org/category with optional dayOfWeek filter
 app.get('/api/recurring-shifts', async (req, res) => {
   try {
-    const { organizationId, category } = req.query;
+    const { organizationId, category, dayOfWeek } = req.query;
     if (!organizationId || !category) {
       return res.status(400).json({ error: 'organizationId and category are required' });
     }
@@ -1460,11 +1539,20 @@ app.get('/api/recurring-shifts', async (req, res) => {
       where: { name: category, organizationId: parseInt(organizationId) },
     });
     if (!shiftCategory) return res.status(404).json({ error: 'Category not found' });
+    
+    // Build where clause
+    const whereClause = {
+      shiftCategoryId: shiftCategory.id,
+      organizationId: parseInt(organizationId),
+    };
+    
+    // Add dayOfWeek filter if provided
+    if (dayOfWeek !== undefined) {
+      whereClause.dayOfWeek = parseInt(dayOfWeek);
+    }
+    
     const recShifts = await prisma.recurringShift.findMany({
-      where: {
-        shiftCategoryId: shiftCategory.id,
-        organizationId: parseInt(organizationId),
-      },
+      where: whereClause,
       orderBy: { startTime: 'asc' },
     });
     res.json(recShifts);
@@ -1473,48 +1561,142 @@ app.get('/api/recurring-shifts', async (req, res) => {
   }
 });
 
-// ADMIN: Check in a user for a shift (by userId, date, category, organizationId, [recurringShiftId])
+// Get available shifts for admin check-in/out (combines real and recurring shifts intelligently)
+app.get('/api/admin/available-shifts', async (req, res) => {
+  try {
+    const { organizationId, category, date } = req.query;
+    if (!organizationId || !category || !date) {
+      return res.status(400).json({ error: 'organizationId, category, and date are required' });
+    }
+
+    const shiftCategory = await prisma.shiftCategory.findFirst({
+      where: { name: category, organizationId: parseInt(organizationId) },
+    });
+    if (!shiftCategory) return res.status(404).json({ error: 'Category not found' });
+
+    // Get the day of week for the selected date (0 = Sunday, 1 = Monday, etc.)
+    const selectedDate = new Date(date + 'T00:00:00Z');
+    const dayOfWeek = selectedDate.getUTCDay();
+
+    // Find all real shifts for the selected date
+    const start = new Date(date + 'T00:00:00Z');
+    const end = new Date(date + 'T23:59:59Z');
+    
+    const realShifts = await prisma.shift.findMany({
+      where: {
+        shiftCategoryId: shiftCategory.id,
+        organizationId: parseInt(organizationId),
+        startTime: { gte: start, lte: end },
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    // Find all recurring shifts for the day of week
+    const recurringShifts = await prisma.recurringShift.findMany({
+      where: {
+        shiftCategoryId: shiftCategory.id,
+        organizationId: parseInt(organizationId),
+        dayOfWeek: dayOfWeek,
+      },
+      orderBy: { startTime: 'asc' },
+    });
+
+    // Build available shifts list - prioritize real shifts over recurring templates
+    const availableShifts = [];
+    const processedNames = new Set();
+
+    // First, add all real shifts for the selected date
+    realShifts.forEach(realShift => {
+      availableShifts.push({
+        id: realShift.id,
+        name: realShift.name,
+        startTime: realShift.startTime,
+        endTime: realShift.endTime,
+        location: realShift.location,
+        slots: realShift.slots,
+        isReal: true,
+        isRecurring: false,
+      });
+      processedNames.add(realShift.name);
+    });
+
+    // Then, add recurring shifts that don't have a real shift with the same name
+    recurringShifts.forEach(recurringShift => {
+      if (!processedNames.has(recurringShift.name)) {
+        availableShifts.push({
+          id: recurringShift.id,
+          name: recurringShift.name,
+          startTime: recurringShift.startTime,
+          endTime: recurringShift.endTime,
+          location: recurringShift.location,
+          slots: recurringShift.slots,
+          isReal: false,
+          isRecurring: true,
+        });
+        processedNames.add(recurringShift.name);
+      }
+    });
+
+    // Sort by start time
+    availableShifts.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+    res.json(availableShifts);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch available shifts', details: err.message });
+  }
+});
+
+// ADMIN: Check in a user for a shift (by userId, date, category, organizationId, [recurringShiftId] or [shiftId])
 app.post('/api/admin/checkin', async (req, res) => {
   try {
-    let { userId, date, category, organizationId, recurringShiftId } = req.body;
+    let { userId, date, category, organizationId, recurringShiftId, shiftId } = req.body;
     if (!userId || !date || !category || !organizationId) {
       return res.status(400).json({ error: 'userId, date, category, and organizationId are required' });
     }
+    
     let realShift = null;
-    if (recurringShiftId) {
-      // 1. Get the recurring shift template
+    
+    if (shiftId) {
+      // Direct shift ID provided - use it directly
+      realShift = await prisma.shift.findUnique({ where: { id: parseInt(shiftId) } });
+      if (!realShift) return res.status(404).json({ error: 'Shift not found' });
+    } else if (recurringShiftId) {
+      // Recurring shift template provided - create or find real shift
       const template = await prisma.recurringShift.findUnique({ where: { id: parseInt(recurringShiftId) } });
       if (!template) return res.status(404).json({ error: 'Recurring shift not found' });
-      // 2. Compute start/end time for the selected date
+      
+      // Compute start/end time for the selected date
       const shiftStart = new Date(date + 'T' + template.startTime.toISOString().substr(11, 8));
       const shiftEnd = new Date(date + 'T' + template.endTime.toISOString().substr(11, 8));
-      // 3. Look for a real shift in the Shift table
+      
+      // Look for a real shift in the Shift table
       realShift = await prisma.shift.findFirst({
         where: {
           shiftCategoryId: template.shiftCategoryId,
           organizationId: template.organizationId,
           startTime: shiftStart,
-      },
-    });
-      // 4. If not found, create it
-    if (!realShift) {
-      realShift = await prisma.shift.create({
-        data: {
+        },
+      });
+      
+      // If not found, create it
+      if (!realShift) {
+        realShift = await prisma.shift.create({
+          data: {
             name: template.name,
             shiftCategoryId: template.shiftCategoryId,
-          startTime: shiftStart,
-          endTime: shiftEnd,
+            startTime: shiftStart,
+            endTime: shiftEnd,
             location: template.location,
             slots: template.slots,
             organizationId: template.organizationId,
-        },
-      });
-    }
+          },
+        });
+      }
     } else {
-      // Fallback: do NOT allow check-in if no recurring shift is selected
-      return res.status(400).json({ error: 'No recurring shift selected. Please select a shift template.' });
+      return res.status(400).json({ error: 'Either shiftId or recurringShiftId must be provided' });
     }
-    // 5. Now use realShift.id for ShiftSignup
+    
+    // Now use realShift.id for ShiftSignup
     let signup = await prisma.shiftSignup.findFirst({
       where: { userId: parseInt(userId), shiftId: realShift.id },
     });
@@ -1696,7 +1878,7 @@ app.get('/api/organizations/:id', async (req, res) => {
   }
 });
 
-// 1. GET /api/terms-and-conditions/:organizationId/active
+// 1. GET /api/terms-and-conditions/:organizationId/active (single document - for backward compatibility)
 app.get('/api/terms-and-conditions/:organizationId/active', async (req, res) => {
   try {
     const { organizationId } = req.params;
@@ -1708,6 +1890,24 @@ app.get('/api/terms-and-conditions/:organizationId/active', async (req, res) => 
       orderBy: { version: 'desc' }
     });
     if (!terms) return res.status(404).json({ error: 'No active terms found' });
+    res.json(terms);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch terms', details: err.message });
+  }
+});
+
+// 2. GET /api/terms-and-conditions/:organizationId/all-active (multiple documents)
+app.get('/api/terms-and-conditions/:organizationId/all-active', async (req, res) => {
+  try {
+    const { organizationId } = req.params;
+    const terms = await prisma.termsAndConditions.findMany({
+      where: {
+        organizationId: parseInt(organizationId),
+        isActive: true
+      },
+      orderBy: { version: 'asc' }
+    });
+    if (!terms || terms.length === 0) return res.status(404).json({ error: 'No active terms found' });
     res.json(terms);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch terms', details: err.message });

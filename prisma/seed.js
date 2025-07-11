@@ -50,6 +50,14 @@ async function main() {
       },
     }),
     prisma.module.upsert({
+      where: { name: 'Volunteer Meal counting sub module' },
+      update: {},
+      create: {
+        name: 'Volunteer Meal counting sub module',
+        description: 'Sub-module for meal counting during shift checkout',
+      },
+    }),
+    prisma.module.upsert({
       where: { name: 'Shift Management' },
       update: {},
       create: {
@@ -376,9 +384,13 @@ async function main() {
 
   // Create module permissions for volunteer users (limited access)
   for (const user of createdUsers) {
-    // Volunteers get access to Donation Management, Meal Counting, Volunteer Meals Counting, and Shift Management
+    // Volunteers get access to Donation Management, Meal Counting, Volunteer Meals Counting, Volunteer Meal counting sub module, and Shift Management
     const volunteerModules = modules.filter(m => 
-      m.name === 'Donation Management' || m.name === 'Meal Counting' || m.name === 'Volunteer Meals Counting' || m.name === 'Shift Management'
+      m.name === 'Donation Management' || 
+      m.name === 'Meal Counting' || 
+      m.name === 'Volunteer Meals Counting' || 
+      m.name === 'Volunteer Meal counting sub module' ||
+      m.name === 'Shift Management'
     );
     
     for (const module of volunteerModules) {
@@ -415,6 +427,26 @@ async function main() {
         createdBy: adminUser.id,
       },
       {
+        organizationId: org1.id,
+        version: '2.0',
+        title: 'Code of Conduct - Fredericton Community Kitchen',
+        fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+        fileName: 'code_of_conduct_fredericton.pdf',
+        fileSize: 156800, // 153KB
+        isActive: true,
+        createdBy: adminUser.id,
+      },
+      {
+        organizationId: org1.id,
+        version: '1.0',
+        title: 'Safety Guidelines - Fredericton Community Kitchen',
+        fileUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+        fileName: 'safety_guidelines_fredericton.pdf',
+        fileSize: 189440, // 185KB
+        isActive: true,
+        createdBy: adminUser.id,
+      },
+      {
         organizationId: org2.id,
         version: '1.0',
         title: 'Volunteer Agreement - Saint John Food Bank',
@@ -428,25 +460,36 @@ async function main() {
     skipDuplicates: true,
   });
 
-  // Get the created terms and conditions
-  const frederictonTerms = await prisma.termsAndConditions.findFirst({
+  // Get all the created terms and conditions for org1
+  const frederictonTerms = await prisma.termsAndConditions.findMany({
     where: { organizationId: org1.id, isActive: true }
   });
 
-  // Create sample user agreements for volunteer users
-  if (frederictonTerms) {
-    await prisma.userAgreement.createMany({
-      data: createdUsers.map(user => ({
-        userId: user.id,
-        organizationId: org1.id,
-        termsAndConditionsId: frederictonTerms.id,
-        signature: `${user.firstName} ${user.lastName}`,
-        signedDocumentUrl: `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf`,
-        ipAddress: '192.168.1.100',
-        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
-      })),
-      skipDuplicates: true,
-    });
+  // Create sample user agreements for volunteer users (for all active terms)
+  if (frederictonTerms.length > 0) {
+    for (const user of createdUsers) {
+      for (const terms of frederictonTerms) {
+        await prisma.userAgreement.upsert({
+          where: {
+            userId_organizationId_termsAndConditionsId: {
+              userId: user.id,
+              organizationId: org1.id,
+              termsAndConditionsId: terms.id,
+            },
+          },
+          update: {},
+          create: {
+            userId: user.id,
+            organizationId: org1.id,
+            termsAndConditionsId: terms.id,
+            signature: `${user.firstName} ${user.lastName}`,
+            signedDocumentUrl: `https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf`,
+            ipAddress: '192.168.1.100',
+            userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
+          },
+        });
+      }
+    }
   }
 
   console.log('Seed data created successfully!');
