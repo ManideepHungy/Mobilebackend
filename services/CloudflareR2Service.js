@@ -25,13 +25,13 @@ class CloudflareR2Service {
 
   async uploadSignedDocument(documentBuffer, userId, organizationId) {
     try {
-      const fileName = `signed-documents/${organizationId}/${userId}/${Date.now()}-signed-agreement.txt`;
+      const fileName = `signed-documents/${organizationId}/${userId}/${Date.now()}-signed-agreement.pdf`;
       
       const command = new PutObjectCommand({
         Bucket: this.bucketName,
         Key: fileName,
         Body: documentBuffer,
-        ContentType: 'text/plain',
+        ContentType: 'application/pdf',
         Metadata: {
           'user-id': userId,
           'organization-id': organizationId,
@@ -91,6 +91,53 @@ class CloudflareR2Service {
     } catch (error) {
       console.error('Error uploading file to R2:', error);
       throw new Error('Failed to upload file to R2');
+    }
+  }
+
+  async downloadFile(fileUrl) {
+    try {
+      const response = await fetch(fileUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download file: ${response.status}`);
+      }
+      return await response.arrayBuffer();
+    } catch (error) {
+      console.error('Error downloading file from R2:', error);
+      throw new Error('Failed to download file from R2');
+    }
+  }
+
+  async uploadSignedOriginalDocument(pdfBuffer, originalFileName, userId, organizationId) {
+    try {
+      const timestamp = Date.now();
+      const signedFileName = `signed-originals/${organizationId}/${userId}/${timestamp}-${originalFileName}`;
+      
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: signedFileName,
+        Body: pdfBuffer,
+        ContentType: 'application/pdf',
+        Metadata: {
+          'user-id': userId,
+          'organization-id': organizationId,
+          'original-file': originalFileName,
+          'upload-date': new Date().toISOString(),
+          'signed': 'true',
+        },
+      });
+
+      await this.client.send(command);
+
+      const url = `${process.env.CLOUDFLARE_R2_PUBLIC_URL}/${signedFileName}`;
+      
+      return {
+        url,
+        fileName: signedFileName,
+        bucket: this.bucketName,
+      };
+    } catch (error) {
+      console.error('Error uploading signed original document to R2:', error);
+      throw new Error('Failed to upload signed original document to R2');
     }
   }
 }

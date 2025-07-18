@@ -3,9 +3,10 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('./generated/prisma');
-const CloudflareR2Service = require('./cloudflareR2');
+const CloudflareR2Service = require('./services/CloudflareR2Service');
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
+const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
 const { DateTime } = require('luxon');
 require('dotenv').config();
 
@@ -84,18 +85,39 @@ app.post('/api/auth/register-step2', async (req, res) => {
     role, 
     termsAndConditionsId, // For backward compatibility
     termsAndConditionsIds, // New field for multiple documents
-    signature 
+    signature, // For backward compatibility
+    signatures // New field for multiple signatures
   } = req.body;
 
   // Support both single and multiple terms IDs
   const termsIds = termsAndConditionsIds || [termsAndConditionsId];
   
-  if (!firstName || !lastName || !email || !password || !organizationId || !role || !signature) {
+  // Support both single signature and multiple signatures
+  let signatureMap = new Map();
+  if (signatures && Array.isArray(signatures)) {
+    // New format: multiple signatures
+    signatures.forEach(sig => {
+      if (sig.termsId && sig.signature) {
+        signatureMap.set(sig.termsId, sig.signature);
+      }
+    });
+  } else if (signature) {
+    // Backward compatibility: single signature for all documents
+    termsIds.forEach(termId => {
+      signatureMap.set(termId, signature);
+    });
+  }
+  
+  if (!firstName || !lastName || !email || !password || !organizationId || !role) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
   if (!termsIds || termsIds.length === 0) {
     return res.status(400).json({ error: 'At least one terms and conditions must be accepted' });
+  }
+
+  if (signatureMap.size === 0) {
+    return res.status(400).json({ error: 'At least one signature must be provided' });
   }
 
   try {
@@ -148,75 +170,243 @@ app.post('/api/auth/register-step2', async (req, res) => {
       adminContactText = `\nIf you do not receive a welcome email after the waiting period, you can contact your kitchen admin at: ${adminEmails.join(', ')}`;
     }
 
-    // Generate signed agreement as PDF and upload to R2
-    let signedDocumentUrl = null;
+    // Process each document and append signatures to original PDFs
+    let signedDocumentUrls = [];
     try {
-      const doc = new PDFDocument({ margin: 40 });
-      let buffers = [];
-      doc.on('data', buffers.push.bind(buffers));
+      console.log(`Starting PDF processing for ${terms.length} documents`);
+      console.log(`Terms data:`, terms);
+      console.log(`Signature map:`, signatureMap);
       
-      // Create a promise to wait for PDF generation and upload
-      const pdfPromise = new Promise(async (resolve, reject) => {
-        doc.on('end', async () => {
-          try {
-            const pdfBuffer = Buffer.concat(buffers);
-      const uploadResult = await CloudflareR2Service.uploadSignedDocument(
-              pdfBuffer,
-        user.id.toString(),
-        organizationId.toString()
-      );
-            resolve(uploadResult.url);
-    } catch (uploadError) {
-            console.error('Failed to upload signed PDF:', uploadError);
-            reject(uploadError);
-          }
-        });
-      });
+      for (const term of terms) {
+        const termSignature = signatureMap.get(term.id);
+        if (!termSignature) {
+          console.warn(`No signature found for terms ID: ${term.id}`);
+          continue;
+        }
 
-      // PDF content
-      doc.fontSize(18).text('SIGNED AGREEMENT', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12).text('User Information:', { underline: true });
-      doc.text(`- Name: ${firstName} ${lastName}`);
-      doc.text(`- Email: ${email}`);
-      doc.text(`- Organization: ${orgName}`);
-      doc.text(`- Role: ${role}`);
-      doc.moveDown();
-      doc.text('Terms & Conditions:', { underline: true });
-      terms.forEach((term, index) => {
-        doc.text(`${index + 1}. Document: ${term.title}`);
-        doc.text(`   Version: ${term.version}`);
-        doc.text(`   Original URL: ${term.fileUrl}`);
-        doc.moveDown(0.5);
-      });
-      doc.moveDown();
-      doc.text(`Signed Date: ${new Date().toISOString()}`);
-      doc.text(`IP Address: ${req.ip || 'unknown'}`);
-      doc.text(`User Agent: ${req.get('User-Agent') || 'unknown'}`);
-      doc.moveDown(2);
-      doc.fontSize(14).text('Digital Signature:', { underline: true });
-      doc.moveDown();
-      doc.fontSize(16).text(signature, { align: 'right' });
-      doc.moveDown();
-      doc.fontSize(10).text('This document confirms that the above user has read and agreed to all the terms and conditions listed above.', { align: 'center' });
-      doc.end();
+        console.log(`Processing document ${term.id}: ${term.title}`);
+        console.log(`Document fileUrl: ${term.fileUrl}`);
+        console.log(`Document fileName: ${term.fileName}`);
+
+        try {
+          // Download the original PDF
+          console.log(`Downloading original PDF: ${term.fileUrl}`);
+          const originalPdfBuffer = await CloudflareR2Service.downloadFile(term.fileUrl);
+          console.log(`Downloaded PDF buffer size: ${originalPdfBuffer.byteLength} bytes`);
+          
+          // Load the original PDF
+          console.log(`Loading PDF with pdf-lib...`);
+          const pdfDoc = await PDFLib.load(originalPdfBuffer);
+          console.log(`PDF loaded successfully, pages: ${pdfDoc.getPageCount()}`);
+          
+          // Create a new page for the signature
+          const page = pdfDoc.addPage();
+          const { width, height } = page.getSize();
+          console.log(`Added signature page, dimensions: ${width}x${height}`);
+          
+          // Add signature content to the new page
+          const fontSize = 12;
+          const margin = 40;
+          
+          // Title
+          page.drawText('DIGITAL SIGNATURE PAGE', {
+            x: margin,
+            y: height - margin,
+            size: 18,
+            color: rgb(0, 0, 0),
+          });
+          
+          // User Information
+          page.drawText('User Information:', {
+            x: margin,
+            y: height - margin - 40,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Name: ${firstName} ${lastName}`, {
+            x: margin,
+            y: height - margin - 60,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Email: ${email}`, {
+            x: margin,
+            y: height - margin - 80,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Organization: ${orgName}`, {
+            x: margin,
+            y: height - margin - 100,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Role: ${role}`, {
+            x: margin,
+            y: height - margin - 120,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          // Document Information
+          page.drawText('Document Information:', {
+            x: margin,
+            y: height - margin - 160,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Title: ${term.title}`, {
+            x: margin,
+            y: height - margin - 180,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`Version: ${term.version}`, {
+            x: margin,
+            y: height - margin - 200,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          // Digital Signature
+          page.drawText('Digital Signature:', {
+            x: margin,
+            y: height - margin - 240,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(termSignature, {
+            x: margin,
+            y: height - margin - 260,
+            size: 16,
+            color: rgb(0, 0, 0),
+          });
+          
+          // Signature Date and Metadata
+          page.drawText(`Signed Date: ${new Date().toISOString()}`, {
+            x: margin,
+            y: height - margin - 300,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          page.drawText(`IP Address: ${req.ip || 'unknown'}`, {
+            x: margin,
+            y: height - margin - 320,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          // Confirmation Statement
+          page.drawText('I have read and agree to the terms and conditions in this document.', {
+            x: margin,
+            y: height - margin - 360,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+          });
+          
+          // Save the modified PDF
+          console.log(`Saving modified PDF...`);
+          const modifiedPdfBytes = await pdfDoc.save();
+          console.log(`Modified PDF saved, size: ${modifiedPdfBytes.length} bytes`);
+          
+          // Upload the signed original document with predictable filename
+          const originalFileName = term.fileName || `document-${term.id}.pdf`;
+          const signedFileName = `signed-document-${term.id}-${originalFileName}`;
+          console.log(`Uploading to R2 with filename: ${signedFileName}`);
+          
+          const uploadResult = await CloudflareR2Service.uploadSignedOriginalDocument(
+            Buffer.from(modifiedPdfBytes),
+            signedFileName,
+            user.id.toString(),
+            organizationId.toString()
+          );
+          
+          signedDocumentUrls.push(uploadResult.url);
+          console.log(`✅ Signed original document uploaded for term ${term.id}: ${uploadResult.url}`);
+          console.log(`Filename: ${signedFileName}`);
+          
+        } catch (docError) {
+          console.error(`❌ Failed to process document ${term.id}:`, docError);
+          console.error(`Error stack:`, docError.stack);
+          // Continue with other documents
+        }
+      }
       
-      // Wait for PDF generation and upload to complete
-      signedDocumentUrl = await pdfPromise;
-      console.log('Signed document uploaded successfully:', signedDocumentUrl);
+      console.log(`Successfully processed ${signedDocumentUrls.length} documents`);
     } catch (pdfErr) {
-      console.error('Failed to generate/upload signed PDF:', pdfErr);
-      // Continue without the signed document URL
+      console.error('❌ Failed to process signed documents:', pdfErr);
+      console.error('Error stack:', pdfErr.stack);
+      // Continue without the signed document URLs
     }
 
     // Create user agreement records for all accepted terms
     for (const termId of termsIds) {
+      const termSignature = signatureMap.get(termId);
+      if (!termSignature) {
+        console.warn(`No signature found for terms ID: ${termId}`);
+        continue;
+      }
+      
+      // Find the corresponding signed document URL
+      const term = terms.find(t => t.id === termId);
+      console.log(`Looking for signed document URL for term ID: ${termId}`);
+      console.log(`Available signed document URLs:`, signedDocumentUrls);
+      
+      // Improved URL matching logic
+      let signedDocumentUrl = null;
+      if (signedDocumentUrls.length > 0) {
+        // Try to find URL by term ID in the filename
+        signedDocumentUrl = signedDocumentUrls.find(url => {
+          const fileName = url.split('/').pop(); // Get filename from URL
+          console.log(`Checking URL: ${url}, filename: ${fileName}`);
+          
+          // Check if filename contains the term ID in the new format
+          if (fileName.includes(`signed-document-${termId}-`)) {
+            console.log(`Found matching URL for term ${termId}: ${url}`);
+            return true;
+          }
+          
+          // Fallback: Check if filename contains the term ID
+          if (fileName.includes(`document-${termId}`) || fileName.includes(`-${termId}.pdf`)) {
+            console.log(`Found matching URL for term ${termId}: ${url}`);
+            return true;
+          }
+          
+          // Fallback: Check if filename contains the original filename
+          if (term?.fileName && fileName.includes(term.fileName)) {
+            console.log(`Found matching URL by original filename for term ${termId}: ${url}`);
+            return true;
+          }
+          
+          return false;
+        });
+      }
+      
+      if (!signedDocumentUrl) {
+        console.warn(`No signed document URL found for term ID: ${termId}`);
+        // If no specific URL found, use the first available URL as fallback
+        if (signedDocumentUrls.length > 0) {
+          signedDocumentUrl = signedDocumentUrls[0];
+          console.log(`Using fallback URL for term ${termId}: ${signedDocumentUrl}`);
+        }
+      }
+      
+      console.log(`Creating user agreement for term ${termId} with URL: ${signedDocumentUrl}`);
+      
       await prisma.userAgreement.create({
         data: {
           userId: user.id,
           organizationId: organizationId,
           termsAndConditionsId: termId,
-          signature: signature,
+          signature: termSignature,
           signedDocumentUrl: signedDocumentUrl,
           ipAddress: req.ip || 'unknown',
           userAgent: req.get('User-Agent') || 'unknown',
@@ -241,8 +431,11 @@ app.post('/api/auth/register-step2', async (req, res) => {
     // TODO: Send email notification
     // For now, just log the registration
     console.log(`New user registration: ${email} (${firstName} ${lastName}) - Pending approval`);
-    if (signedDocumentUrl) {
-      console.log(`Signed document uploaded: ${signedDocumentUrl}`);
+    if (signedDocumentUrls.length > 0) {
+      console.log(`Signed documents uploaded: ${signedDocumentUrls.length} documents`);
+      signedDocumentUrls.forEach((url, index) => {
+        console.log(`  Document ${index + 1}: ${url}`);
+      });
     }
 
     res.status(201).json({ 
@@ -256,7 +449,7 @@ app.post('/api/auth/register-step2', async (req, res) => {
         organizationId: user.organizationId,
         status: user.status
       },
-      signedDocumentUrl: signedDocumentUrl
+      signedDocumentUrls: signedDocumentUrls
     });
   } catch (err) {
     if (err.code === 'P2002') {
@@ -1862,6 +2055,69 @@ app.get('/api/donations/by-shift', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch donations', details: err.message });
+  }
+});
+
+// Get donations by user with date filtering
+app.get('/api/donations/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { date, week } = req.query;
+    
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    // Build where clause for date filtering
+    let dateFilter = {};
+    if (date) {
+      const startDate = new Date(date + 'T00:00:00Z');
+      const endDate = new Date(date + 'T23:59:59Z');
+      dateFilter = {
+        createdAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      };
+    } else if (week) {
+      const startOfWeek = new Date(week + 'T00:00:00Z');
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(endOfWeek.getDate() + 6);
+      endOfWeek.setHours(23, 59, 59, 999);
+      dateFilter = {
+        createdAt: {
+          gte: startOfWeek,
+          lte: endOfWeek
+        }
+      };
+    }
+
+    const donations = await prisma.donation.findMany({
+      where: {
+        shiftSignup: {
+          userId: parseInt(userId)
+        },
+        ...dateFilter
+      },
+      include: {
+        donor: true,
+        shift: {
+          include: {
+            shiftCategory: true
+          }
+        },
+        items: {
+          include: {
+            category: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    console.log(`Found ${donations.length} donations for user ${userId}`);
+    res.json(donations);
+  } catch (err) {
+    console.error('Error fetching user donations:', err);
+    res.status(500).json({ error: 'Failed to fetch user donations', details: err.message });
   }
 });
 
