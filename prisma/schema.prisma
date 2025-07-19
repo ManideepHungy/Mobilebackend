@@ -13,6 +13,7 @@ model Organization {
   name                  String               @unique
   address               String?
   incoming_dollar_value Float?               @default(10)
+  email                 String
   donations             Donation[]
   categories            DonationCategory[]
   donors                Donor[]

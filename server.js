@@ -2625,6 +2625,61 @@ app.get('/api/shift-signups/check', async (req, res) => {
   }
 });
 
+// Cancel a shift signup
+app.delete('/api/my-shifts/:signupId', async (req, res) => {
+  try {
+    const { signupId } = req.params;
+    if (!signupId) return res.status(400).json({ error: 'signupId is required' });
+
+    // Find the signup
+    const signup = await prisma.shiftSignup.findUnique({
+      where: { id: parseInt(signupId) },
+      include: { shift: true }
+    });
+    
+    if (!signup) {
+      return res.status(404).json({ error: 'Shift signup not found' });
+    }
+
+    // Check if already checked in
+    if (signup.checkIn) {
+      return res.status(400).json({ error: 'Cannot cancel a shift that has already been checked in' });
+    }
+
+    // Delete the signup
+    await prisma.shiftSignup.delete({
+      where: { id: parseInt(signupId) },
+    });
+
+    res.json({ message: 'Shift cancelled successfully' });
+  } catch (err) {
+    console.error('Cancel shift error:', err);
+    res.status(500).json({ error: 'Failed to cancel shift', details: err.message });
+  }
+});
+
+// Get organization details by ID
+app.get('/api/organization/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'organization ID is required' });
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: parseInt(id) },
+      select: { id: true, name: true, email: true, address: true },
+    });
+
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    res.json(organization);
+  } catch (err) {
+    console.error('Get organization error:', err);
+    res.status(500).json({ error: 'Failed to get organization', details: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Server accessible at:`);
