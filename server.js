@@ -1238,22 +1238,28 @@ app.get('/api/my-shifts', async (req, res) => {
       !s.checkOut // Only show if not checked out
     );
     // Map to a simpler format for frontend
-    const result = filtered.map(s => ({
-      signupId: s.id,
-      shiftId: s.shift.id,
-      name: s.shift.name,
-      date: s.shift.startTime,
-      time: `${formatTimeNoTZ(s.shift.startTime)}–${formatTimeNoTZ(s.shift.endTime)}`,
-      location: s.shift.organization.name,
-      slots: s.shift.slots,
-      icon: getShiftIcon(s.shift.shiftCategory.name, s.shift.name),
-      category: s.shift.shiftCategory.name,
-      checkIn: s.checkIn,
-      checkOut: s.checkOut,
-      mealsServed: s.mealsServed,
-      organization: s.shift.organization.name,
-      organizationId: s.shift.organizationId,
-    }));
+    const result = filtered.map(s => {
+      // Convert UTC times to Halifax timezone
+      const halifaxStart = DateTime.fromJSDate(s.shift.startTime, { zone: 'America/Halifax' });
+      const halifaxEnd = DateTime.fromJSDate(s.shift.endTime, { zone: 'America/Halifax' });
+      
+      return {
+        signupId: s.id,
+        shiftId: s.shift.id,
+        name: s.shift.name,
+        date: s.shift.startTime,
+        time: `${halifaxStart.toFormat('h:mm a')}–${halifaxEnd.toFormat('h:mm a')}`,
+        location: s.shift.organization.name,
+        slots: s.shift.slots,
+        icon: getShiftIcon(s.shift.shiftCategory.name, s.shift.name),
+        category: s.shift.shiftCategory.name,
+        checkIn: s.checkIn,
+        checkOut: s.checkOut,
+        mealsServed: s.mealsServed,
+        organization: s.shift.organization.name,
+        organizationId: s.shift.organizationId,
+      };
+    });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch registered shifts', details: err.message });
