@@ -11,6 +11,7 @@ async function main() {
       name: 'Fredericton Community Kitchen',
       address: '123 Main St, Fredericton',
       incoming_dollar_value: 10.0,
+      email: 'info@frederictoncommunitykitchen.com',
     },
   });
   const org2 = await prisma.organization.upsert({
@@ -20,6 +21,7 @@ async function main() {
       name: 'Saint John Food Bank',
       address: '456 King St, Saint John',
       incoming_dollar_value: 8.0,
+      email: 'info@saintjohnfoodbank.com',
     },
   });
 
@@ -291,19 +293,17 @@ async function main() {
   let adminUser;
   if (!existingAdmin) {
     const hashedPassword = await bcrypt.hash('raj', 10);
-    adminUser = await prisma.user.create({
-      data: {
-        email: 'raj@gmail.com',
-        password: hashedPassword,
-        firstName: 'Raj',
-        lastName: 'Admin',
-        role: 'ADMIN',
-        status: 'APPROVED',
-        agreementAccepted: true,
-        agreementSignature: 'Raj Admin',
-        organizationId: org1.id,
-      },
-    });
+          adminUser = await prisma.user.create({
+        data: {
+          email: 'raj@gmail.com',
+          password: hashedPassword,
+          firstName: 'Raj',
+          lastName: 'Admin',
+          role: 'ADMIN',
+          status: 'APPROVED',
+          organizationId: org1.id,
+        },
+      });
     console.log('Seeded admin user: raj@gmail.com / raj');
   } else {
     adminUser = existingAdmin;
@@ -350,8 +350,6 @@ async function main() {
           lastName: userData.lastName,
           role: userData.role,
           status: 'APPROVED',
-          agreementAccepted: true,
-          agreementSignature: `${userData.firstName} ${userData.lastName}`,
           organizationId: userData.organizationId,
         },
       });

@@ -136,7 +136,7 @@ app.post('/api/auth/register-step2', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user with PENDING status
+    // Create user with PENDING status and new fields
     const user = await prisma.user.create({
       data: { 
         email, 
@@ -146,7 +146,33 @@ app.post('/api/auth/register-step2', async (req, res) => {
         lastName, 
         organizationId, 
         role,
-        status: 'PENDING'
+        status: 'PENDING',
+        // NEW FIELDS - ALL OPTIONAL
+        registrationType: req.body.registrationType,
+        ageBracket: req.body.ageBracket,
+        birthdate: req.body.birthdate ? new Date(req.body.birthdate) : null,
+        pronouns: req.body.pronouns,
+        address: req.body.address,
+        city: req.body.city,
+        postalCode: req.body.postalCode,
+        homePhone: req.body.homePhone,
+        emergencyContactName: req.body.emergencyContactName,
+        emergencyContactNumber: req.body.emergencyContactNumber,
+        communicationPreferences: req.body.communicationPreferences ? JSON.stringify(req.body.communicationPreferences) : null,
+        profilePictureUrl: req.body.profilePictureUrl,
+        allergies: req.body.allergies,
+        medicalConcerns: req.body.medicalConcerns,
+        preferredDays: req.body.preferredDays ? JSON.stringify(req.body.preferredDays) : null,
+        preferredShifts: req.body.preferredShifts ? JSON.stringify(req.body.preferredShifts) : null,
+        frequency: req.body.frequency,
+        preferredPrograms: req.body.preferredPrograms ? JSON.stringify(req.body.preferredPrograms) : null,
+        canCallIfShortHanded: req.body.canCallIfShortHanded,
+        schoolWorkCommitment: req.body.schoolWorkCommitment,
+        requiredHours: req.body.requiredHours ? parseInt(req.body.requiredHours) : null,
+        howDidYouHear: req.body.howDidYouHear,
+        startDate: req.body.startDate ? new Date(req.body.startDate) : null,
+        parentGuardianName: req.body.parentGuardianName,
+        parentGuardianEmail: req.body.parentGuardianEmail,
       },
     });
 

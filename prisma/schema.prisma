@@ -44,6 +44,56 @@ model User {
   resetToken        String?
   resetTokenExpiry  DateTime?
   updatedAt         DateTime               @updatedAt
+  
+  // NEW FIELDS - ALL NULLABLE FOR BACKWARD COMPATIBILITY
+  // Registration Type
+  registrationType  RegistrationType?      @default(ADULT)
+  
+  // Personal Information
+  ageBracket        String?
+  birthdate         DateTime?
+  pronouns          String?
+  
+  // Contact & Address
+  address           String?
+  city              String?
+  postalCode        String?
+  homePhone         String?
+  
+  // Emergency Contact
+  emergencyContactName    String?
+  emergencyContactNumber  String?
+  
+  // Communication Preferences
+  communicationPreferences String?
+  
+  // Profile
+  profilePictureUrl String?
+  
+  // Health & Safety
+  allergies         String?
+  medicalConcerns   String?
+  
+  // Volunteering Preferences
+  preferredDays     String?
+  preferredShifts   String?
+  frequency         String?
+  preferredPrograms String?
+  canCallIfShortHanded Boolean?            @default(true)
+  
+  // Commitment Details
+  schoolWorkCommitment Boolean?            @default(false)
+  requiredHours     Int?
+  
+  // Additional Information
+  howDidYouHear     String?
+  startDate         DateTime?
+  
+  // Youth Volunteer Information (for minors)
+  parentGuardianName    String?
+  parentGuardianEmail   String?
+  
+  // EXISTING RELATIONS - UNCHANGED
   shiftSignups      ShiftSignup[]
   organization      Organization           @relation(fields: [organizationId], references: [id])
   agreements        UserAgreement[]
@@ -221,4 +271,52 @@ enum UserStatus {
   PENDING
   APPROVED
   DENIED
+}
+
+enum RegistrationType {
+  ADULT
+  MINOR
+}
+
+enum AgeBracket {
+  UNDER_16
+  AGE_16_29
+  AGE_30_39
+  AGE_40_49
+  AGE_50_59
+  AGE_60_69
+  AGE_70_PLUS
+}
+
+enum Pronouns {
+  HE_HIM
+  SHE_HER
+  THEY_THEM
+  PREFER_NOT_TO_SAY
+}
+
+enum CommunicationPreference {
+  EMAIL
+  SMS
+  APP_NOTIFICATION
+}
+
+enum Frequency {
+  WEEKLY
+  BI_WEEKLY
+  MONTHLY
+  DAILY
+  ONCE
+  WHEN_TIME_PERMITS
+}
+
+enum HowDidYouHear {
+  FAMILY_FRIENDS
+  GOOGLE
+  SOCIAL_MEDIA
+  CONNECT_FREDERICTON
+  SCHOOL
+  WORK
+  NOTICE_BOARDS
+  EVENTS
 }
