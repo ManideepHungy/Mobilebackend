@@ -656,6 +656,116 @@ app.put('/api/users/:id/password', async (req, res) => {
   }
 });
 
+// Delete user account endpoint
+app.delete('/api/users/:id', async (req, res) => {
+  const userId = parseInt(req.params.id);
+  const { password } = req.body;
+  
+  if (isNaN(userId) || !password) {
+    return res.status(400).json({ error: 'Valid user ID and password are required' });
+  }
+
+  try {
+    // Get the current user to verify password
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(400).json({ error: 'Password is incorrect' });
+    }
+
+    // Delete user account and all related data
+    // We need to delete related records manually due to foreign key constraints
+    
+    try {
+      // Start a transaction to ensure all deletions succeed or fail together
+      await prisma.$transaction(async (tx) => {
+        console.log(`Starting deletion process for user ${userId}`);
+        
+        // First, update any users who reference this user as approvedBy or deniedBy
+        const approvedByUpdate = await tx.user.updateMany({
+          where: { approvedBy: userId },
+          data: { approvedBy: null }
+        });
+        console.log(`Updated ${approvedByUpdate.count} users who referenced this user as approvedBy`);
+        
+        const deniedByUpdate = await tx.user.updateMany({
+          where: { deniedBy: userId },
+          data: { deniedBy: null }
+        });
+        console.log(`Updated ${deniedByUpdate.count} users who referenced this user as deniedBy`);
+        
+        // Delete user agreements
+        console.log(`Attempting to delete user agreements for user ${userId}`);
+        const agreementsDeleted = await tx.userAgreement.deleteMany({
+          where: { userId: userId },
+        });
+        console.log(`Deleted ${agreementsDeleted.count} user agreements`);
+        
+        // Delete module permissions
+        const permissionsDeleted = await tx.userModulePermission.deleteMany({
+          where: { userId: userId },
+        });
+        console.log(`Deleted ${permissionsDeleted.count} module permissions`);
+        
+        // Delete shift signups (this will cascade to donations)
+        const shiftSignupsDeleted = await tx.shiftSignup.deleteMany({
+          where: { userId: userId },
+        });
+        console.log(`Deleted ${shiftSignupsDeleted.count} shift signups`);
+        
+        // Verify all related records are deleted before deleting the user
+        const remainingAgreements = await tx.userAgreement.count({ where: { userId: userId } });
+        const remainingPermissions = await tx.userModulePermission.count({ where: { userId: userId } });
+        const remainingShiftSignups = await tx.shiftSignup.count({ where: { userId: userId } });
+        
+        if (remainingAgreements > 0 || remainingPermissions > 0 || remainingShiftSignups > 0) {
+          throw new Error(`Failed to delete all related records. Remaining: ${remainingAgreements} agreements, ${remainingPermissions} permissions, ${remainingShiftSignups} shift signups`);
+        }
+        
+        // Finally delete the user
+        await tx.user.delete({
+          where: { id: userId },
+        });
+        console.log(`Successfully deleted user ${userId}`);
+      });
+    } catch (transactionError) {
+      console.error('Transaction failed during user deletion:', transactionError);
+      
+      // Check for specific Prisma error codes
+      if (transactionError.code === 'P2003') {
+        throw new Error('Cannot delete account due to existing data relationships. Please contact support.');
+      } else if (transactionError.code === 'P2025') {
+        throw new Error('User not found or already deleted');
+      } else if (transactionError.code === 'P2002') {
+        throw new Error('Database constraint violation during deletion');
+      } else {
+        throw new Error(`Failed to delete user account: ${transactionError.message}`);
+      }
+    }
+
+    res.json({ message: 'User account deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting user account:', err);
+    
+    // Provide more user-friendly error messages
+    let errorMessage = 'Failed to delete user account';
+    if (err.code === 'P2003') {
+      errorMessage = 'Cannot delete account due to existing data relationships. Please contact support.';
+    } else if (err.code === 'P2025') {
+      errorMessage = 'User not found or already deleted';
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
+    
+    res.status(500).json({ error: errorMessage, details: err.message });
+  }
+});
+
 // Forgot password endpoint - Send verification code
 app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body;
@@ -959,8 +1069,9 @@ app.get('/api/shifts', async (req, res) => {
       }
     }
 
-    // Fetch real shifts
-    const realShifts = await prisma.shift.findMany({
+    // Fetch ALL real shifts in the date range (including inactive ones)
+    // We need to see ALL shifts to know which dates are "blocked" by inactive shifts
+    const allRealShifts = await prisma.shift.findMany({
       where: {
         organizationId: parseInt(organizationId),
         startTime: {
@@ -973,11 +1084,28 @@ app.get('/api/shifts', async (req, res) => {
         shiftCategory: true,
         organization: true,
         shiftSignups: true,
+        RecurringShift: true, // Include to check recurring shift status
       },
       orderBy: { startTime: 'asc' },
     });
 
+    console.log('Found all real shifts (including inactive):', allRealShifts.length);
+
+    // Filter shifts based on isActive status
+    const realShifts = allRealShifts.filter(shift => {
+      // If this shift has a recurringShiftId, check both Shift.isActive AND RecurringShift.isActive
+      if (shift.recurringShiftId && shift.RecurringShift) {
+        return shift.isActive && shift.RecurringShift.isActive;
+      }
+      // If no recurringShiftId, just check Shift.isActive
+      return shift.isActive;
+    });
+
+    console.log('After isActive filter:', realShifts.length);
+
     console.log('Found real shifts:', realShifts.length);
+
+
 
     // Map real shifts to frontend format
     const mappedShifts = realShifts.map(shift => {
@@ -994,15 +1122,16 @@ app.get('/api/shifts', async (req, res) => {
         slots: Math.max(0, shift.slots - shift.shiftSignups.length),
         icon: getShiftIcon(shift.shiftCategory.name, shift.name),
         category: shift.shiftCategory.name,
-        isRecurring: false,
+        isRecurring: shift.recurringShiftId ? true : false,
         date: halifaxStart.toISODate(),
       };
     });
 
-    // Fetch recurring shift templates
+    // Fetch recurring shift templates (only active ones)
     const recurringTemplates = await prisma.recurringShift.findMany({
       where: {
         organizationId: parseInt(organizationId),
+        isActive: true, // Only show active recurring shift templates
         ...categoryFilter,
       },
       include: {
@@ -1018,19 +1147,32 @@ app.get('/api/shifts', async (req, res) => {
     for (const date of dates) {
       const dayOfWeek = date.weekday % 7; // Convert Luxon weekday to DB format
       
-      for (const template of recurringTemplates) {
-        if (template.dayOfWeek === dayOfWeek) {
-          // Check if a real shift already exists for this date/template
-          const existingRealShift = realShifts.find(shift => 
-            shift.name === template.name &&
-            shift.shiftCategoryId === template.shiftCategoryId &&
-            shift.organizationId === template.organizationId
-          );
+              for (const template of recurringTemplates) {
+          if (template.dayOfWeek === dayOfWeek) {
+            // Check if a real shift already exists for this date/template (including inactive ones)
+            // We need to check ALL shifts to know if a date is "blocked" by an inactive shift
+            const existingRealShift = allRealShifts.find(shift => 
+              shift.name === template.name &&
+              shift.shiftCategoryId === template.shiftCategoryId &&
+              shift.organizationId === template.organizationId
+            );
 
-          if (!existingRealShift) {
-            // Create virtual shift
-            const templateStart = DateTime.fromJSDate(template.startTime, { zone: 'America/Halifax' });
-            const templateEnd = DateTime.fromJSDate(template.endTime, { zone: 'America/Halifax' });
+            // Debug logging
+            if (existingRealShift) {
+              console.log(`Found existing real shift for ${template.name} on ${date.toISODate()}:`, {
+                shiftId: existingRealShift.id,
+                isActive: existingRealShift.isActive,
+                recurringShiftId: existingRealShift.recurringShiftId
+              });
+            }
+
+            // Only create virtual shift if NO real shift exists for this date/template
+            // If a real shift exists (active or inactive), don't create virtual shift
+            if (!existingRealShift) {
+              console.log(`Creating virtual shift for ${template.name} on ${date.toISODate()} - no real shift exists`);
+              // Create virtual shift
+              const templateStart = DateTime.fromJSDate(template.startTime, { zone: 'America/Halifax' });
+              const templateEnd = DateTime.fromJSDate(template.endTime, { zone: 'America/Halifax' });
             
             const virtualStart = date.set({
               hour: templateStart.hour,
@@ -1058,7 +1200,9 @@ app.get('/api/shifts', async (req, res) => {
               isRecurring: true,
               date: date.toISODate(),
             });
-          }
+            } else {
+              console.log(`Skipping virtual shift for ${template.name} on ${date.toISODate()} - real shift exists (ID: ${existingRealShift.id}, Active: ${existingRealShift.isActive})`);
+            }
         }
       }
     }
@@ -1687,7 +1831,8 @@ app.get('/api/admin/shifts', async (req, res) => {
     // Find all real shifts for that date/category/org
     const start = new Date(date + 'T00:00:00Z');
     const end = new Date(date + 'T23:59:59Z');
-    const realShifts = await prisma.shift.findMany({
+    // Fetch ALL real shifts in the date range (including inactive ones)
+    const allRealShifts = await prisma.shift.findMany({
       where: {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
@@ -1697,8 +1842,19 @@ app.get('/api/admin/shifts', async (req, res) => {
         shiftSignups: {
           include: { user: true },
         },
+        RecurringShift: true, // Include to check recurring shift status
       },
       orderBy: { startTime: 'asc' },
+    });
+
+    // Filter shifts based on isActive status
+    const realShifts = allRealShifts.filter(shift => {
+      // If this shift has a recurringShiftId, check both Shift.isActive AND RecurringShift.isActive
+      if (shift.recurringShiftId && shift.RecurringShift) {
+        return shift.isActive && shift.RecurringShift.isActive;
+      }
+      // If no recurringShiftId, just check Shift.isActive
+      return shift.isActive;
     });
     // Find recurring templates for this category/org
     const dayOfWeek = start.getUTCDay();
@@ -1707,6 +1863,7 @@ app.get('/api/admin/shifts', async (req, res) => {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
         dayOfWeek,
+        isActive: true, // Only show active recurring shifts
       },
       include: {
         shiftCategory: true,
@@ -1743,7 +1900,7 @@ app.get('/api/admin/shifts', async (req, res) => {
       slots: shift.slots - shift.shiftSignups.length,
       icon: getShiftIcon(shift.shiftCategory.name, shift.name),
       category: shift.shiftCategory.name,
-      isRecurring: false,
+      isRecurring: shift.recurringShiftId ? true : false,
       date: shift.startTime.toISOString().slice(0, 10),
       shiftSignups: shift.shiftSignups,
     }));
@@ -1777,7 +1934,10 @@ app.get('/api/recurring-shifts', async (req, res) => {
     }
     
     const recShifts = await prisma.recurringShift.findMany({
-      where: whereClause,
+      where: {
+        ...whereClause,
+        isActive: true, // Only show active recurring shifts
+      },
       orderBy: { startTime: 'asc' },
     });
     res.json(recShifts);
@@ -1807,13 +1967,27 @@ app.get('/api/admin/available-shifts', async (req, res) => {
     const start = new Date(date + 'T00:00:00Z');
     const end = new Date(date + 'T23:59:59Z');
     
-    const realShifts = await prisma.shift.findMany({
+    // Fetch ALL real shifts in the date range (including inactive ones)
+    const allRealShifts = await prisma.shift.findMany({
       where: {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
         startTime: { gte: start, lte: end },
       },
+      include: {
+        RecurringShift: true, // Include to check recurring shift status
+      },
       orderBy: { startTime: 'asc' },
+    });
+
+    // Filter shifts based on isActive status
+    const realShifts = allRealShifts.filter(shift => {
+      // If this shift has a recurringShiftId, check both Shift.isActive AND RecurringShift.isActive
+      if (shift.recurringShiftId && shift.RecurringShift) {
+        return shift.isActive && shift.RecurringShift.isActive;
+      }
+      // If no recurringShiftId, just check Shift.isActive
+      return shift.isActive;
     });
 
     // Find all recurring shifts for the day of week
@@ -1822,6 +1996,7 @@ app.get('/api/admin/available-shifts', async (req, res) => {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
         dayOfWeek: dayOfWeek,
+        isActive: true, // Only show active recurring shifts
       },
       orderBy: { startTime: 'asc' },
     });
@@ -1840,7 +2015,7 @@ app.get('/api/admin/available-shifts', async (req, res) => {
         location: realShift.location,
         slots: realShift.slots,
         isReal: true,
-        isRecurring: false,
+        isRecurring: realShift.recurringShiftId ? true : false,
       });
       processedNames.add(realShift.name);
     });
@@ -2320,8 +2495,8 @@ app.get('/api/shifts-for-meals', async (req, res) => {
     const start = new Date(date + 'T00:00:00');
     const end = new Date(date + 'T23:59:59');
     
-    // Get real shifts for this date
-    const realShifts = await prisma.shift.findMany({
+    // Get ALL real shifts for this date (including inactive ones)
+    const allRealShifts = await prisma.shift.findMany({
       where: {
         organizationId: parseInt(organizationId),
         startTime: { gte: start, lte: end },
@@ -2332,8 +2507,19 @@ app.get('/api/shifts-for-meals', async (req, res) => {
         shiftSignups: {
           where: { userId: parseInt(userId || '0') },
         },
+        RecurringShift: true, // Include to check recurring shift status
       },
       orderBy: { startTime: 'asc' },
+    });
+
+    // Filter shifts based on isActive status
+    const realShifts = allRealShifts.filter(shift => {
+      // If this shift has a recurringShiftId, check both Shift.isActive AND RecurringShift.isActive
+      if (shift.recurringShiftId && shift.RecurringShift) {
+        return shift.isActive && shift.RecurringShift.isActive;
+      }
+      // If no recurringShiftId, just check Shift.isActive
+      return shift.isActive;
     });
 
     // Get recurring shift templates
@@ -2342,6 +2528,7 @@ app.get('/api/shifts-for-meals', async (req, res) => {
       where: {
         organizationId: parseInt(organizationId),
         dayOfWeek,
+        isActive: true, // Only show active recurring shifts
       },
       include: {
         shiftCategory: true,
@@ -2411,7 +2598,7 @@ app.get('/api/shifts-for-meals', async (req, res) => {
         icon: shift.shiftCategory.icon,
       },
       existingSignup: shift.shiftSignups.length > 0 ? shift.shiftSignups[0] : null,
-      isRecurring: false,
+      isRecurring: shift.recurringShiftId ? true : false,
     }));
 
     const result = [...mappedRealShifts, ...virtualShifts];

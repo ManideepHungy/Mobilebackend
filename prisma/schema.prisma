@@ -26,78 +26,53 @@ model Organization {
 }
 
 model User {
-  id                Int                    @id @default(autoincrement())
-  email             String                 @unique
-  phone             String?                @unique
-  password          String
-  firstName         String
-  lastName          String
-  createdAt         DateTime               @default(now())
-  organizationId    Int
-  role              UserRole               @default(VOLUNTEER)
-  status            UserStatus             @default(PENDING)
-  approvedBy        Int?
-  approvedAt        DateTime?
-  deniedBy          Int?
-  deniedAt          DateTime?
-  denialReason      String?
-  resetToken        String?
-  resetTokenExpiry  DateTime?
-  updatedAt         DateTime               @updatedAt
-  
-  // NEW FIELDS - ALL NULLABLE FOR BACKWARD COMPATIBILITY
-  // Registration Type
-  registrationType  RegistrationType?      @default(ADULT)
-  
-  // Personal Information
-  ageBracket        String?
-  birthdate         DateTime?
-  pronouns          String?
-  
-  // Contact & Address
-  address           String?
-  city              String?
-  postalCode        String?
-  homePhone         String?
-  
-  // Emergency Contact
-  emergencyContactName    String?
-  emergencyContactNumber  String?
-  
-  // Communication Preferences
+  id                       Int                    @id @default(autoincrement())
+  email                    String                 @unique
+  phone                    String?                @unique
+  password                 String
+  firstName                String
+  lastName                 String
+  createdAt                DateTime               @default(now())
+  organizationId           Int
+  role                     UserRole               @default(VOLUNTEER)
+  resetToken               String?
+  resetTokenExpiry         DateTime?
+  updatedAt                DateTime               @updatedAt
+  approvedAt               DateTime?
+  approvedBy               Int?
+  denialReason             String?
+  deniedAt                 DateTime?
+  deniedBy                 Int?
+  status                   UserStatus             @default(PENDING)
+  address                  String?
+  allergies                String?
+  birthdate                DateTime?
+  canCallIfShortHanded     Boolean?               @default(true)
+  city                     String?
+  emergencyContactName     String?
+  emergencyContactNumber   String?
+  homePhone                String?
+  medicalConcerns          String?
+  parentGuardianEmail      String?
+  parentGuardianName       String?
+  postalCode               String?
+  preferredDays            String?
+  preferredPrograms        String?
+  preferredShifts          String?
+  profilePictureUrl        String?
+  registrationType         RegistrationType?      @default(ADULT)
+  requiredHours            Int?
+  schoolWorkCommitment     Boolean?               @default(false)
+  startDate                DateTime?
+  ageBracket               String?
   communicationPreferences String?
-  
-  // Profile
-  profilePictureUrl String?
-  
-  // Health & Safety
-  allergies         String?
-  medicalConcerns   String?
-  
-  // Volunteering Preferences
-  preferredDays     String?
-  preferredShifts   String?
-  frequency         String?
-  preferredPrograms String?
-  canCallIfShortHanded Boolean?            @default(true)
-  
-  // Commitment Details
-  schoolWorkCommitment Boolean?            @default(false)
-  requiredHours     Int?
-  
-  // Additional Information
-  howDidYouHear     String?
-  startDate         DateTime?
-  
-  // Youth Volunteer Information (for minors)
-  parentGuardianName    String?
-  parentGuardianEmail   String?
-  
-  // EXISTING RELATIONS - UNCHANGED
-  shiftSignups      ShiftSignup[]
-  organization      Organization           @relation(fields: [organizationId], references: [id])
-  agreements        UserAgreement[]
-  modulePermissions UserModulePermission[]
+  frequency                String?
+  howDidYouHear            String?
+  pronouns                 String?
+  shiftSignups             ShiftSignup[]
+  organization             Organization           @relation(fields: [organizationId], references: [id])
+  agreements               UserAgreement[]
+  modulePermissions        UserModulePermission[]
 }
 
 model ShiftCategory {
@@ -113,18 +88,21 @@ model ShiftCategory {
 }
 
 model Shift {
-  id              Int           @id @default(autoincrement())
-  name            String
-  shiftCategoryId Int
-  startTime       DateTime
-  endTime         DateTime
-  location        String
-  slots           Int
-  organizationId  Int
-  donations       Donation[]
-  organization    Organization  @relation(fields: [organizationId], references: [id])
-  shiftCategory   ShiftCategory @relation(fields: [shiftCategoryId], references: [id])
-  shiftSignups    ShiftSignup[]
+  id               Int             @id @default(autoincrement())
+  name             String
+  shiftCategoryId  Int
+  startTime        DateTime
+  endTime          DateTime
+  location         String
+  slots            Int
+  organizationId   Int
+  isActive         Boolean         @default(true)
+  recurringShiftId Int?
+  donations        Donation[]
+  organization     Organization    @relation(fields: [organizationId], references: [id])
+  RecurringShift   RecurringShift? @relation(fields: [recurringShiftId], references: [id])
+  shiftCategory    ShiftCategory   @relation(fields: [shiftCategoryId], references: [id])
+  shiftSignups     ShiftSignup[]
 }
 
 model ShiftSignup {
@@ -152,7 +130,7 @@ model Donor {
 
 model Donation {
   id             Int            @id @default(autoincrement())
-  shiftId        Int
+  shiftId        Int?
   organizationId Int
   donorId        Int
   shiftSignupId  Int?
@@ -160,7 +138,7 @@ model Donation {
   summary        Float
   donor          Donor          @relation(fields: [donorId], references: [id])
   organization   Organization   @relation(fields: [organizationId], references: [id])
-  shift          Shift          @relation(fields: [shiftId], references: [id])
+  shift          Shift?         @relation(fields: [shiftId], references: [id])
   shiftSignup    ShiftSignup?   @relation(fields: [shiftSignupId], references: [id])
   items          DonationItem[]
 }
@@ -181,20 +159,26 @@ model DonationItem {
   weightKg   Float
   category   DonationCategory @relation(fields: [categoryId], references: [id])
   donation   Donation         @relation(fields: [donationId], references: [id])
+
+  @@unique([donationId, categoryId])
 }
 
 model RecurringShift {
-  id              Int           @id @default(autoincrement())
-  name            String
-  dayOfWeek       Int
-  startTime       DateTime
-  endTime         DateTime
-  shiftCategoryId Int
-  location        String
-  slots           Int
-  organizationId  Int
-  organization    Organization  @relation(fields: [organizationId], references: [id])
-  shiftCategory   ShiftCategory @relation(fields: [shiftCategoryId], references: [id])
+  id                      Int                      @id @default(autoincrement())
+  name                    String
+  dayOfWeek               Int?
+  startTime               DateTime
+  endTime                 DateTime
+  shiftCategoryId         Int
+  location                String
+  slots                   Int
+  organizationId          Int
+  isRecurring             Boolean                  @default(true)
+  isActive                Boolean                  @default(true)
+  organization            Organization             @relation(fields: [organizationId], references: [id])
+  shiftCategory           ShiftCategory            @relation(fields: [shiftCategoryId], references: [id])
+  Shift                   Shift[]
+  ShiftRegistrationFields ShiftRegistrationFields?
 }
 
 model WeighingCategory {
@@ -209,10 +193,11 @@ model WeighingCategory {
 }
 
 model Module {
-  id          Int                    @id @default(autoincrement())
-  name        String                 @unique
-  description String?
-  permissions UserModulePermission[]
+  id                    Int                     @id @default(autoincrement())
+  name                  String                  @unique
+  description           String?
+  RoleDefaultPermission RoleDefaultPermission[]
+  permissions           UserModulePermission[]
 }
 
 model UserModulePermission {
@@ -259,6 +244,52 @@ model UserAgreement {
   user                 User               @relation(fields: [userId], references: [id])
 
   @@unique([userId, organizationId, termsAndConditionsId])
+}
+
+model ShiftRegistrationFields {
+  id                              Int            @id @default(autoincrement())
+  requireFirstName                Boolean        @default(true)
+  requireLastName                 Boolean        @default(true)
+  requireEmail                    Boolean        @default(true)
+  requireAgeBracket               Boolean        @default(false)
+  requireBirthdate                Boolean        @default(false)
+  requirePronouns                 Boolean        @default(false)
+  requirePhone                    Boolean        @default(false)
+  requireAddress                  Boolean        @default(false)
+  requireCity                     Boolean        @default(false)
+  requirePostalCode               Boolean        @default(false)
+  requireHomePhone                Boolean        @default(false)
+  requireEmergencyContactName     Boolean        @default(false)
+  requireEmergencyContactNumber   Boolean        @default(false)
+  requireCommunicationPreferences Boolean        @default(false)
+  requireProfilePictureUrl        Boolean        @default(false)
+  requireAllergies                Boolean        @default(false)
+  requireMedicalConcerns          Boolean        @default(false)
+  requirePreferredDays            Boolean        @default(false)
+  requirePreferredShifts          Boolean        @default(false)
+  requireFrequency                Boolean        @default(false)
+  requirePreferredPrograms        Boolean        @default(false)
+  requireCanCallIfShortHanded     Boolean        @default(false)
+  requireSchoolWorkCommitment     Boolean        @default(false)
+  requireRequiredHours            Boolean        @default(false)
+  requireHowDidYouHear            Boolean        @default(false)
+  requireStartDate                Boolean        @default(false)
+  requireParentGuardianName       Boolean        @default(false)
+  requireParentGuardianEmail      Boolean        @default(false)
+  createdAt                       DateTime       @default(now())
+  updatedAt                       DateTime
+  recurringShiftId                Int            @unique
+  RecurringShift                  RecurringShift @relation(fields: [recurringShiftId], references: [id], onDelete: Cascade)
+}
+
+model RoleDefaultPermission {
+  id        Int      @id @default(autoincrement())
+  role      UserRole
+  moduleId  Int
+  canAccess Boolean  @default(false)
+  Module    Module   @relation(fields: [moduleId], references: [id])
+
+  @@unique([role, moduleId])
 }
 
 enum UserRole {
