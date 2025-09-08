@@ -2001,28 +2001,80 @@ app.get('/api/admin/available-shifts', async (req, res) => {
       orderBy: { startTime: 'asc' },
     });
 
-    // Build available shifts list - prioritize real shifts over recurring templates
-    const availableShifts = [];
-    const processedNames = new Set();
-
-    // First, add all real shifts for the selected date
-    realShifts.forEach(realShift => {
-      availableShifts.push({
-        id: realShift.id,
-        name: realShift.name,
-        startTime: realShift.startTime,
-        endTime: realShift.endTime,
-        location: realShift.location,
-        slots: realShift.slots,
-        isReal: true,
-        isRecurring: realShift.recurringShiftId ? true : false,
-      });
-      processedNames.add(realShift.name);
+    console.log(`\n=== AVAILABLE SHIFTS DEBUG for ${category} on ${date} ===`);
+    console.log(`- Found ${allRealShifts.length} total real shifts in database`);
+    console.log(`- Found ${realShifts.length} active real shifts after filtering`);
+    console.log(`- Found ${recurringShifts.length} active recurring shifts`);
+    
+    console.log('\n=== ALL REAL SHIFTS IN DATABASE ===');
+    allRealShifts.forEach((shift, index) => {
+      console.log(`  ${index + 1}. Real shift: "${shift.name}" (${shift.startTime.toISOString()} - ${shift.endTime.toISOString()}) [ID: ${shift.id}] [RecurringID: ${shift.recurringShiftId}] [Active: ${shift.isActive}]`);
+    });
+    
+    console.log('\n=== ACTIVE REAL SHIFTS ===');
+    realShifts.forEach((shift, index) => {
+      console.log(`  ${index + 1}. Active real shift: "${shift.name}" (${shift.startTime.toISOString()} - ${shift.endTime.toISOString()}) [ID: ${shift.id}] [RecurringID: ${shift.recurringShiftId}]`);
+    });
+    
+    console.log('\n=== RECURRING SHIFTS ===');
+    recurringShifts.forEach((shift, index) => {
+      console.log(`  ${index + 1}. Recurring shift: "${shift.name}" (${shift.startTime.toISOString()} - ${shift.endTime.toISOString()}) [ID: ${shift.id}]`);
     });
 
-    // Then, add recurring shifts that don't have a real shift with the same name
-    recurringShifts.forEach(recurringShift => {
-      if (!processedNames.has(recurringShift.name)) {
+    // Build available shifts list - prioritize real shifts over recurring templates
+    const availableShifts = [];
+    const processedShiftKeys = new Set();
+
+    console.log('\n=== PROCESSING REAL SHIFTS ===');
+    // First, add all real shifts for the selected date (with duplicate prevention)
+    realShifts.forEach((realShift, index) => {
+      // Create a unique key based on name, start time, and end time to avoid duplicates
+      const shiftKey = `${realShift.name}-${realShift.startTime.toISOString()}-${realShift.endTime.toISOString()}`;
+      
+      console.log(`\nProcessing real shift ${index + 1}:`);
+      console.log(`  Name: "${realShift.name}"`);
+      console.log(`  Time: ${realShift.startTime.toISOString()} - ${realShift.endTime.toISOString()}`);
+      console.log(`  ID: ${realShift.id}`);
+      console.log(`  RecurringID: ${realShift.recurringShiftId}`);
+      console.log(`  Shift Key: "${shiftKey}"`);
+      console.log(`  Already processed: ${processedShiftKeys.has(shiftKey)}`);
+      
+      // Only add if we haven't seen this exact shift before
+      if (!processedShiftKeys.has(shiftKey)) {
+        availableShifts.push({
+          id: realShift.id,
+          name: realShift.name,
+          startTime: realShift.startTime,
+          endTime: realShift.endTime,
+          location: realShift.location,
+          slots: realShift.slots,
+          isReal: true,
+          isRecurring: realShift.recurringShiftId ? true : false,
+        });
+        processedShiftKeys.add(shiftKey);
+        console.log(`  ✅ ADDED real shift: ${realShift.name} [ID: ${realShift.id}]`);
+      } else {
+        console.log(`  ❌ SKIPPED duplicate real shift: ${realShift.name} [ID: ${realShift.id}]`);
+      }
+    });
+
+    console.log('\n=== PROCESSING RECURRING SHIFTS ===');
+    // Then, add recurring shifts that don't have a real shift created from this template
+    // The key insight: If a real shift exists with recurringShiftId = recurringShift.id, 
+    // then we should NOT show the recurring template
+    recurringShifts.forEach((recurringShift, index) => {
+      console.log(`\nProcessing recurring shift ${index + 1}:`);
+      console.log(`  Name: "${recurringShift.name}"`);
+      console.log(`  Time: ${recurringShift.startTime.toISOString()} - ${recurringShift.endTime.toISOString()}`);
+      console.log(`  ID: ${recurringShift.id}`);
+      
+      // Check if there's already a real shift created from this recurring shift template
+      const hasRealShiftFromTemplate = realShifts.some(realShift => 
+        realShift.recurringShiftId === recurringShift.id
+      );
+      console.log(`  Has real shift from template: ${hasRealShiftFromTemplate}`);
+      
+      if (!hasRealShiftFromTemplate) {
         availableShifts.push({
           id: recurringShift.id,
           name: recurringShift.name,
@@ -2033,12 +2085,19 @@ app.get('/api/admin/available-shifts', async (req, res) => {
           isReal: false,
           isRecurring: true,
         });
-        processedNames.add(recurringShift.name);
+        console.log(`  ✅ ADDED recurring shift: ${recurringShift.name} [ID: ${recurringShift.id}]`);
+      } else {
+        console.log(`  ❌ SKIPPED recurring shift: ${recurringShift.name} [ID: ${recurringShift.id}] - Has real shift from template`);
       }
     });
 
     // Sort by start time
     availableShifts.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+    console.log(`Final available shifts count: ${availableShifts.length}`);
+    availableShifts.forEach(shift => {
+      console.log(`  Available: ${shift.name} (${shift.startTime.toISOString()} - ${shift.endTime.toISOString()}) [${shift.isReal ? 'Real' : 'Recurring'}]`);
+    });
 
     res.json(availableShifts);
   } catch (err) {
