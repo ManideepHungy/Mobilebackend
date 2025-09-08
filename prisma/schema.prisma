@@ -12,8 +12,9 @@ model Organization {
   id                    Int                  @id @default(autoincrement())
   name                  String               @unique
   address               String?
-  incoming_dollar_value Float?               @default(10)
+  incoming_dollar_value Decimal?             @default(10) @db.Decimal(10, 2)
   email                 String
+  mealsvalue            Decimal?             @default(10) @db.Decimal(10, 2)
   donations             Donation[]
   categories            DonationCategory[]
   donors                Donor[]
