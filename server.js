@@ -1145,10 +1145,24 @@ app.get('/api/shifts', async (req, res) => {
     // Generate virtual shifts from recurring templates
     const virtualShifts = [];
     for (const date of dates) {
-      const dayOfWeek = date.weekday % 7; // Convert Luxon weekday to DB format
+      // Convert Luxon weekday to DB format
+      // Luxon: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday
+      // DB: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
+      const dayOfWeek = date.weekday === 7 ? 0 : date.weekday;
+      console.log(`Luxon weekday: ${date.weekday}, Converted dayOfWeek: ${dayOfWeek}`);
+      console.log(`\n=== VIRTUAL SHIFT GENERATION for ${date.toISODate()} ===`);
+      console.log(`Date: ${date.toISODate()}, Day of week: ${dayOfWeek} (0=Sunday, 1=Monday, etc.)`);
+      console.log(`Total recurring templates: ${recurringTemplates.length}`);
       
-              for (const template of recurringTemplates) {
-          if (template.dayOfWeek === dayOfWeek) {
+      // Log all recurring templates and their dayOfWeek
+      recurringTemplates.forEach((template, index) => {
+        console.log(`  Template ${index + 1}: "${template.name}" - dayOfWeek: ${template.dayOfWeek} - isActive: ${template.isActive}`);
+      });
+      
+      for (const template of recurringTemplates) {
+        console.log(`\nChecking template: "${template.name}" (dayOfWeek: ${template.dayOfWeek})`);
+        if (template.dayOfWeek === dayOfWeek) {
+          console.log(`  ✅ Day of week matches! Creating virtual shift...`);
             // Check if a real shift already exists for this date/template (including inactive ones)
             // We need to check ALL shifts to know if a date is "blocked" by an inactive shift
             const existingRealShift = allRealShifts.find(shift => 
@@ -1203,6 +1217,8 @@ app.get('/api/shifts', async (req, res) => {
             } else {
               console.log(`Skipping virtual shift for ${template.name} on ${date.toISODate()} - real shift exists (ID: ${existingRealShift.id}, Active: ${existingRealShift.isActive})`);
             }
+        } else {
+          console.log(`  ❌ Day of week doesn't match (template: ${template.dayOfWeek}, date: ${dayOfWeek})`);
         }
       }
     }
@@ -1300,6 +1316,7 @@ app.post('/api/shift-signup', async (req, res) => {
             location: template.location,
             slots: template.slots,
             organizationId: template.organizationId,
+            recurringShiftId: template.id, // Link to the recurring template
           },
           include: {
             shiftSignups: true
@@ -1781,23 +1798,48 @@ app.get('/api/admin/registered-users', async (req, res) => {
       },
     });
 
-    if (realShifts.length === 0) {
+    // Also check for recurring shift signups for this date/category
+    const selectedDate = new Date(date + 'T00:00:00Z');
+    const dayOfWeek = selectedDate.getUTCDay();
+    
+    const recurringShifts = await prisma.recurringShift.findMany({
+      where: {
+        shiftCategoryId: shiftCategory.id,
+        organizationId: parseInt(organizationId),
+        dayOfWeek: dayOfWeek,
+        isActive: true,
+      },
+    });
+
+    // Get all shift IDs (both real and recurring)
+    const realShiftIds = realShifts.map(shift => shift.id);
+    const recurringShiftIds = recurringShifts.map(shift => shift.id);
+
+    if (realShiftIds.length === 0) {
       return res.json([]);
     }
 
-    // Get all shift IDs for this date/category
-    const shiftIds = realShifts.map(shift => shift.id);
-
-    // Find all users who have signups for these shifts
+    // Find all users who have signups for these shifts (only real shifts, not recurring)
+    // Note: ShiftSignup only has shiftId, not recurringShiftId
+    console.log(`\n=== REGISTERED USERS DEBUG for ${category} on ${date} ===`);
+    console.log(`- Real shift IDs:`, realShiftIds);
+    console.log(`- Recurring shift IDs:`, recurringShiftIds);
+    console.log(`- Only checking real shift signups (not recurring)`);
+    
     const signups = await prisma.shiftSignup.findMany({
       where: {
-        shiftId: { in: shiftIds },
+        shiftId: { in: realShiftIds }
       },
       include: {
         user: {
           select: { id: true, firstName: true, lastName: true, email: true, role: true },
         },
       },
+    });
+    
+    console.log(`- Found ${signups.length} signups for real shifts`);
+    signups.forEach((signup, index) => {
+      console.log(`  ${index + 1}. User: ${signup.user.firstName} ${signup.user.lastName} - Shift ID: ${signup.shiftId}`);
     });
 
     // Extract unique users from signups
@@ -1990,21 +2032,45 @@ app.get('/api/admin/available-shifts', async (req, res) => {
       return shift.isActive;
     });
 
-    // Find all recurring shifts for the day of week
+    // Find all recurring shifts for the day of week (including those with null dayOfWeek)
     const recurringShifts = await prisma.recurringShift.findMany({
       where: {
         shiftCategoryId: shiftCategory.id,
         organizationId: parseInt(organizationId),
-        dayOfWeek: dayOfWeek,
+        OR: [
+          { dayOfWeek: dayOfWeek },
+          { dayOfWeek: null } // Include shifts that don't have dayOfWeek set
+        ],
         isActive: true, // Only show active recurring shifts
       },
       orderBy: { startTime: 'asc' },
     });
 
+    // For non-recurring shifts (dayOfWeek = null), we need to check if they have real shifts for the specific date
+    const nonRecurringShifts = recurringShifts.filter(shift => shift.dayOfWeek === null);
+    const recurringShiftsForDay = recurringShifts.filter(shift => shift.dayOfWeek === dayOfWeek);
+    
+    console.log(`- Found ${recurringShiftsForDay.length} recurring shifts for day ${dayOfWeek}`);
+    console.log(`- Found ${nonRecurringShifts.length} non-recurring shifts (dayOfWeek = null)`);
+
     console.log(`\n=== AVAILABLE SHIFTS DEBUG for ${category} on ${date} ===`);
+    console.log(`- Day of week: ${dayOfWeek} (0=Sunday, 1=Monday, etc.)`);
     console.log(`- Found ${allRealShifts.length} total real shifts in database`);
     console.log(`- Found ${realShifts.length} active real shifts after filtering`);
     console.log(`- Found ${recurringShifts.length} active recurring shifts`);
+    
+    // Debug: Check all recurring shifts for this category (regardless of dayOfWeek)
+    const allRecurringShifts = await prisma.recurringShift.findMany({
+      where: {
+        shiftCategoryId: shiftCategory.id,
+        organizationId: parseInt(organizationId),
+        isActive: true,
+      },
+    });
+    console.log(`- Total recurring shifts for category: ${allRecurringShifts.length}`);
+    allRecurringShifts.forEach((shift, index) => {
+      console.log(`  ${index + 1}. "${shift.name}" - dayOfWeek: ${shift.dayOfWeek} - isActive: ${shift.isActive}`);
+    });
     
     console.log('\n=== ALL REAL SHIFTS IN DATABASE ===');
     allRealShifts.forEach((shift, index) => {
@@ -2028,19 +2094,25 @@ app.get('/api/admin/available-shifts', async (req, res) => {
     console.log('\n=== PROCESSING REAL SHIFTS ===');
     // First, add all real shifts for the selected date (with duplicate prevention)
     realShifts.forEach((realShift, index) => {
-      // Create a unique key based on name, start time, and end time to avoid duplicates
-      const shiftKey = `${realShift.name}-${realShift.startTime.toISOString()}-${realShift.endTime.toISOString()}`;
+      // Create a more robust unique key based on name, rounded start time, and end time to avoid duplicates
+      // Round times to the nearest minute to handle timezone/precision differences
+      const startTimeRounded = new Date(Math.round(realShift.startTime.getTime() / 60000) * 60000);
+      const endTimeRounded = new Date(Math.round(realShift.endTime.getTime() / 60000) * 60000);
+      const shiftKey = `${realShift.name}-${startTimeRounded.toISOString()}-${endTimeRounded.toISOString()}`;
       
       console.log(`\nProcessing real shift ${index + 1}:`);
       console.log(`  Name: "${realShift.name}"`);
       console.log(`  Time: ${realShift.startTime.toISOString()} - ${realShift.endTime.toISOString()}`);
+      console.log(`  Rounded Time: ${startTimeRounded.toISOString()} - ${endTimeRounded.toISOString()}`);
       console.log(`  ID: ${realShift.id}`);
       console.log(`  RecurringID: ${realShift.recurringShiftId}`);
       console.log(`  Shift Key: "${shiftKey}"`);
       console.log(`  Already processed: ${processedShiftKeys.has(shiftKey)}`);
       
       // Only add if we haven't seen this exact shift before
-      if (!processedShiftKeys.has(shiftKey)) {
+      // But be more lenient - only skip if it's the exact same shift ID
+      const existingShift = availableShifts.find(s => s.id === realShift.id);
+      if (!existingShift) {
         availableShifts.push({
           id: realShift.id,
           name: realShift.name,
@@ -2054,19 +2126,18 @@ app.get('/api/admin/available-shifts', async (req, res) => {
         processedShiftKeys.add(shiftKey);
         console.log(`  ✅ ADDED real shift: ${realShift.name} [ID: ${realShift.id}]`);
       } else {
-        console.log(`  ❌ SKIPPED duplicate real shift: ${realShift.name} [ID: ${realShift.id}]`);
+        console.log(`  ❌ SKIPPED duplicate real shift: ${realShift.name} [ID: ${realShift.id}] - Already exists`);
       }
     });
 
-    console.log('\n=== PROCESSING RECURRING SHIFTS ===');
-    // Then, add recurring shifts that don't have a real shift created from this template
-    // The key insight: If a real shift exists with recurringShiftId = recurringShift.id, 
-    // then we should NOT show the recurring template
-    recurringShifts.forEach((recurringShift, index) => {
+    console.log('\n=== PROCESSING RECURRING SHIFTS FOR DAY ===');
+    // Process recurring shifts for the specific day of week
+    recurringShiftsForDay.forEach((recurringShift, index) => {
       console.log(`\nProcessing recurring shift ${index + 1}:`);
       console.log(`  Name: "${recurringShift.name}"`);
       console.log(`  Time: ${recurringShift.startTime.toISOString()} - ${recurringShift.endTime.toISOString()}`);
       console.log(`  ID: ${recurringShift.id}`);
+      console.log(`  DayOfWeek: ${recurringShift.dayOfWeek}`);
       
       // Check if there's already a real shift created from this recurring shift template
       const hasRealShiftFromTemplate = realShifts.some(realShift => 
@@ -2087,7 +2158,46 @@ app.get('/api/admin/available-shifts', async (req, res) => {
         });
         console.log(`  ✅ ADDED recurring shift: ${recurringShift.name} [ID: ${recurringShift.id}]`);
       } else {
-        console.log(`  ❌ SKIPPED recurring shift: ${recurringShift.name} [ID: ${recurringShift.id}] - Has real shift from template`);
+        console.log(`  ❌ SKIPPED recurring shift (has real shift): ${recurringShift.name} [ID: ${recurringShift.id}]`);
+      }
+    });
+
+    console.log('\n=== PROCESSING NON-RECURRING SHIFTS (dayOfWeek = null) ===');
+    // Process non-recurring shifts - these should only show if they have real shifts for the specific date
+    nonRecurringShifts.forEach((nonRecurringShift, index) => {
+      console.log(`\nProcessing non-recurring shift ${index + 1}:`);
+      console.log(`  Name: "${nonRecurringShift.name}"`);
+      console.log(`  Time: ${nonRecurringShift.startTime.toISOString()} - ${nonRecurringShift.endTime.toISOString()}`);
+      console.log(`  ID: ${nonRecurringShift.id}`);
+      console.log(`  DayOfWeek: ${nonRecurringShift.dayOfWeek} (null = non-recurring)`);
+      
+      // For non-recurring shifts, check if there's a real shift for the specific date
+      const hasRealShiftForDate = realShifts.some(realShift => 
+        realShift.recurringShiftId === nonRecurringShift.id
+      );
+      console.log(`  Has real shift for this date: ${hasRealShiftForDate}`);
+      
+      if (hasRealShiftForDate) {
+        // Find the real shift for this date
+        const realShiftForDate = realShifts.find(realShift => 
+          realShift.recurringShiftId === nonRecurringShift.id
+        );
+        
+        if (realShiftForDate) {
+          availableShifts.push({
+            id: realShiftForDate.id,
+            name: realShiftForDate.name,
+            startTime: realShiftForDate.startTime,
+            endTime: realShiftForDate.endTime,
+            location: realShiftForDate.location,
+            slots: realShiftForDate.slots,
+            isReal: true,
+            isRecurring: true,
+          });
+          console.log(`  ✅ ADDED real shift for non-recurring: ${realShiftForDate.name} [ID: ${realShiftForDate.id}]`);
+        }
+      } else {
+        console.log(`  ❌ SKIPPED non-recurring shift (no real shift for this date): ${nonRecurringShift.name} [ID: ${nonRecurringShift.id}]`);
       }
     });
 
@@ -2148,6 +2258,7 @@ app.post('/api/admin/checkin', async (req, res) => {
             location: template.location,
             slots: template.slots,
             organizationId: template.organizationId,
+            recurringShiftId: template.id, // Link to the recurring template
           },
         });
       }
@@ -2822,6 +2933,7 @@ app.post('/api/shift-signups', async (req, res) => {
             location: template.location,
             slots: template.slots,
             organizationId: template.organizationId,
+            recurringShiftId: template.id, // Link to the recurring template
           },
           include: {
             shiftSignups: true
