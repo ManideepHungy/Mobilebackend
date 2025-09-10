@@ -2215,141 +2215,187 @@ app.get('/api/admin/available-shifts', async (req, res) => {
   }
 });
 
-// ADMIN: Check in a user for a shift (by userId, date, category, organizationId, [recurringShiftId] or [shiftId])
+// ADMIN: Check in a user for a shift (by userId and shiftId only)
 app.post('/api/admin/checkin', async (req, res) => {
   try {
-    let { userId, date, category, organizationId, recurringShiftId, shiftId } = req.body;
-    if (!userId || !date || !category || !organizationId) {
-      return res.status(400).json({ error: 'userId, date, category, and organizationId are required' });
+    const { userId, shiftId } = req.body;
+    if (!userId || !shiftId) {
+      return res.status(400).json({ error: 'userId and shiftId are required' });
     }
-    
-    let realShift = null;
-    
-    if (shiftId) {
-      // Direct shift ID provided - use it directly
-      realShift = await prisma.shift.findUnique({ where: { id: parseInt(shiftId) } });
-      if (!realShift) return res.status(404).json({ error: 'Shift not found' });
-    } else if (recurringShiftId) {
-      // Recurring shift template provided - create or find real shift
-      const template = await prisma.recurringShift.findUnique({ where: { id: parseInt(recurringShiftId) } });
-      if (!template) return res.status(404).json({ error: 'Recurring shift not found' });
-      
-      // Compute start/end time for the selected date
-      const shiftStart = new Date(date + 'T' + template.startTime.toISOString().substr(11, 8));
-      const shiftEnd = new Date(date + 'T' + template.endTime.toISOString().substr(11, 8));
-      
-      // Look for a real shift in the Shift table
-      realShift = await prisma.shift.findFirst({
-        where: {
-          shiftCategoryId: template.shiftCategoryId,
-          organizationId: template.organizationId,
-          startTime: shiftStart,
-        },
-      });
-      
-      // If not found, create it
-      if (!realShift) {
-        realShift = await prisma.shift.create({
-          data: {
-            name: template.name,
-            shiftCategoryId: template.shiftCategoryId,
-            startTime: shiftStart,
-            endTime: shiftEnd,
-            location: template.location,
-            slots: template.slots,
-            organizationId: template.organizationId,
-            recurringShiftId: template.id, // Link to the recurring template
-          },
-        });
-      }
-    } else {
-      return res.status(400).json({ error: 'Either shiftId or recurringShiftId must be provided' });
-    }
-    
-    // Now use realShift.id for ShiftSignup
+
+    console.log(`\n=== CHECK-IN DEBUG ===`);
+    console.log(`- User ID: ${userId}`);
+    console.log(`- Shift ID: ${shiftId}`);
+
+    // Find the existing signup for this user and shift
     let signup = await prisma.shiftSignup.findFirst({
-      where: { userId: parseInt(userId), shiftId: realShift.id },
+      where: { 
+        userId: parseInt(userId), 
+        shiftId: parseInt(shiftId) 
+      },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true } },
+        shift: { select: { name: true, startTime: true, endTime: true } }
+      }
     });
+
     if (!signup) {
-      signup = await prisma.shiftSignup.create({
-        data: {
-          userId: parseInt(userId),
-          shiftId: realShift.id,
-          checkIn: new Date(),
-        },
-      });
-    } else {
-      signup = await prisma.shiftSignup.update({
-        where: { id: signup.id },
-        data: { checkIn: new Date() },
-      });
+      console.log(`- No signup found for user ${userId} and shift ${shiftId}`);
+      return res.status(404).json({ error: 'User is not registered for this shift' });
     }
+
+    console.log(`- Found signup: ${signup.user.firstName} ${signup.user.lastName} for shift "${signup.shift.name}"`);
+    console.log(`- Current check-in: ${signup.checkIn}`);
+    console.log(`- Current check-out: ${signup.checkOut}`);
+
+    // Update the signup with check-in time
+    signup = await prisma.shiftSignup.update({
+      where: { id: signup.id },
+      data: { checkIn: new Date() },
+    });
+
+    console.log(`- Updated check-in: ${signup.checkIn}`);
+    console.log(`=== END CHECK-IN DEBUG ===\n`);
+
     res.json({
       id: signup.id,
       checkIn: signup.checkIn,
       checkOut: signup.checkOut,
     });
   } catch (err) {
+    console.error('Check-in error:', err);
     res.status(500).json({ error: 'Failed to check in', details: err.message });
   }
 });
 
-// ADMIN: Check out a user for a shift (by userId, date, category, organizationId)
+// ADMIN: Check out a user for a shift (by userId and shiftId only)
 app.post('/api/admin/checkout', async (req, res) => {
   try {
-    let { userId, date, category, organizationId } = req.body;
-    if (!userId || !date || !category || !organizationId) {
-      return res.status(400).json({ error: 'userId, date, category, and organizationId are required' });
+    const { userId, shiftId } = req.body;
+    if (!userId || !shiftId) {
+      return res.status(400).json({ error: 'userId and shiftId are required' });
     }
-    
-    // Find the shiftCategoryId
-    const shiftCategory = await prisma.shiftCategory.findFirst({
-      where: { name: category, organizationId: parseInt(organizationId) },
-    });
-    if (!shiftCategory) return res.status(404).json({ error: 'Category not found' });
-    
-    // Find ALL shifts for this date/category/org (using the same logic as checkin)
-    const start = new Date(date + 'T00:00:00');
-    const end = new Date(date + 'T23:59:59');
-    
-    const realShifts = await prisma.shift.findMany({
-      where: {
-        shiftCategoryId: shiftCategory.id,
-        organizationId: parseInt(organizationId),
-        startTime: { gte: start, lte: end },
+
+    console.log(`\n=== CHECK-OUT DEBUG ===`);
+    console.log(`- User ID: ${userId}`);
+    console.log(`- Shift ID: ${shiftId}`);
+
+    // Find the existing signup for this user and shift
+    let signup = await prisma.shiftSignup.findFirst({
+      where: { 
+        userId: parseInt(userId), 
+        shiftId: parseInt(shiftId) 
       },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true } },
+        shift: { select: { name: true, startTime: true, endTime: true } }
+      }
     });
-    
-    if (realShifts.length === 0) {
-      return res.status(404).json({ error: 'No shift found for this date/category/org' });
-    }
-    
-    // Find the signup for this user across all shifts for this date/category/org
-    let signup = null;
-    for (const shift of realShifts) {
-      signup = await prisma.shiftSignup.findFirst({
-        where: { userId: parseInt(userId), shiftId: shift.id },
-      });
-      if (signup) break; // Found the signup
-    }
-    
+
     if (!signup) {
-      return res.status(404).json({ error: 'No signup found for this user/shift' });
+      console.log(`- No signup found for user ${userId} and shift ${shiftId}`);
+      return res.status(404).json({ error: 'User is not registered for this shift' });
     }
-    
-    // Update the signup with checkout time
+
+    console.log(`- Found signup: ${signup.user.firstName} ${signup.user.lastName} for shift "${signup.shift.name}"`);
+    console.log(`- Current check-in: ${signup.checkIn}`);
+    console.log(`- Current check-out: ${signup.checkOut}`);
+
+    // Update the signup with check-out time
     signup = await prisma.shiftSignup.update({
       where: { id: signup.id },
       data: { checkOut: new Date() },
     });
-    
+
+    console.log(`- Updated check-out: ${signup.checkOut}`);
+    console.log(`=== END CHECK-OUT DEBUG ===\n`);
+
     res.json({
       id: signup.id,
       checkIn: signup.checkIn,
       checkOut: signup.checkOut,
     });
   } catch (err) {
+    console.error('Check-out error:', err);
     res.status(500).json({ error: 'Failed to check out', details: err.message });
+  }
+});
+
+// ADMIN: Get users registered for a specific shift
+app.get('/api/admin/shift-users', async (req, res) => {
+  try {
+    const { shiftId, date, organizationId } = req.query;
+    if (!shiftId || !date || !organizationId) {
+      return res.status(400).json({ error: 'shiftId, date, and organizationId are required' });
+    }
+
+    console.log(`\n=== SHIFT USERS DEBUG for shift ${shiftId} on ${date} ===`);
+    
+    // Check if it's a recurring shift or real shift
+    let realShiftId = shiftId;
+    if (shiftId.startsWith('recurring-')) {
+      // It's a recurring shift template, we need to find or create the real shift
+      const parts = shiftId.split('-');
+      const recurringId = parseInt(parts[1]);
+      const shiftDate = date;
+      
+      console.log(`- Recurring shift ID: ${recurringId}, Date: ${shiftDate}`);
+      
+      // Check if a real shift exists for this date/template
+      const start = new Date(shiftDate + 'T00:00:00');
+      const end = new Date(shiftDate + 'T23:59:59');
+      
+      const existingRealShift = await prisma.shift.findFirst({
+        where: {
+          recurringShiftId: recurringId,
+          organizationId: parseInt(organizationId),
+          startTime: { gte: start, lte: end },
+        },
+      });
+      
+      if (existingRealShift) {
+        realShiftId = existingRealShift.id.toString();
+        console.log(`- Found existing real shift: ${realShiftId}`);
+      } else {
+        console.log(`- No real shift exists for this recurring template on this date`);
+        return res.json([]);
+      }
+    } else {
+      console.log(`- Real shift ID: ${realShiftId}`);
+    }
+
+    // Find all users who have signups for this specific shift
+    const signups = await prisma.shiftSignup.findMany({
+      where: {
+        shiftId: parseInt(realShiftId),
+      },
+      include: {
+        user: {
+          select: { id: true, firstName: true, lastName: true, email: true, role: true },
+        },
+      },
+    });
+
+    console.log(`- Found ${signups.length} signups for shift ${realShiftId}`);
+    signups.forEach((signup, index) => {
+      console.log(`  ${index + 1}. User: ${signup.user.firstName} ${signup.user.lastName} - Email: ${signup.user.email}`);
+    });
+
+    // Extract unique users from signups
+    const userMap = new Map();
+    signups.forEach(signup => {
+      if (!userMap.has(signup.user.id)) {
+        userMap.set(signup.user.id, signup.user);
+      }
+    });
+
+    const users = Array.from(userMap.values());
+    console.log(`- Returning ${users.length} unique users`);
+    
+    res.json(users);
+  } catch (err) {
+    console.error('Error fetching shift users:', err);
+    res.status(500).json({ error: 'Failed to fetch shift users', details: err.message });
   }
 });
 
