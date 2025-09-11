@@ -2444,6 +2444,98 @@ app.get('/api/admin/user-shift-signup', async (req, res) => {
   }
 });
 
+// ADMIN: Get a user's shift status by shiftId (for "All Categories" mode)
+app.get('/api/admin/user-shift-status', async (req, res) => {
+  try {
+    const { userId, shiftId, organizationId, date } = req.query;
+    if (!userId || !shiftId || !organizationId) {
+      return res.status(400).json({ error: 'userId, shiftId, and organizationId are required' });
+    }
+
+    console.log(`\n=== USER SHIFT STATUS DEBUG ===`);
+    console.log(`- User ID: ${userId}`);
+    console.log(`- Shift ID: ${shiftId}`);
+    console.log(`- Organization ID: ${organizationId}`);
+    console.log(`- Date: ${date}`);
+
+    // Check if it's a recurring shift or real shift
+    let realShiftId = shiftId;
+    if (shiftId.startsWith('recurring-')) {
+      // It's a recurring shift template, we need to find the real shift for the specific date
+      const parts = shiftId.split('-');
+      const recurringId = parseInt(parts[1]);
+      
+      console.log(`- Recurring shift ID: ${recurringId}`);
+      
+      if (date) {
+        // Find the real shift for the specific date
+        const start = new Date(date + 'T00:00:00');
+        const end = new Date(date + 'T23:59:59');
+        
+        const existingRealShift = await prisma.shift.findFirst({
+          where: {
+            recurringShiftId: recurringId,
+            organizationId: parseInt(organizationId),
+            startTime: { gte: start, lte: end },
+          },
+        });
+        
+        if (existingRealShift) {
+          realShiftId = existingRealShift.id.toString();
+          console.log(`- Found real shift for date ${date}: ${realShiftId}`);
+        } else {
+          console.log(`- No real shift found for this recurring template on date ${date}`);
+          return res.json(null);
+        }
+      } else {
+        // If no date provided, find the most recent real shift for this recurring template
+        const existingRealShift = await prisma.shift.findFirst({
+          where: {
+            recurringShiftId: recurringId,
+            organizationId: parseInt(organizationId),
+          },
+          orderBy: { startTime: 'desc' },
+        });
+        
+        if (existingRealShift) {
+          realShiftId = existingRealShift.id.toString();
+          console.log(`- Found most recent real shift: ${realShiftId}`);
+        } else {
+          console.log(`- No real shift found for this recurring template`);
+          return res.json(null);
+        }
+      }
+    } else {
+      console.log(`- Real shift ID: ${realShiftId}`);
+    }
+
+    // Find the signup for this user and shift
+    const signup = await prisma.shiftSignup.findFirst({
+      where: { 
+        userId: parseInt(userId), 
+        shiftId: parseInt(realShiftId) 
+      },
+    });
+
+    if (!signup) {
+      console.log(`- No signup found for user ${userId} and shift ${realShiftId}`);
+      return res.json(null);
+    }
+
+    console.log(`- Found signup: checkIn=${signup.checkIn}, checkOut=${signup.checkOut}`);
+    console.log(`=== END USER SHIFT STATUS DEBUG ===\n`);
+
+    res.json({
+      id: signup.id,
+      checkIn: signup.checkIn,
+      checkOut: signup.checkOut,
+    });
+  } catch (err) {
+    console.error('User shift status error:', err);
+    res.status(500).json({ error: 'Failed to fetch user shift status', details: err.message });
+  }
+});
+
 // Get all donations for a shift, with donor and category info (for summary modal)
 app.get('/api/donations/by-shift', async (req, res) => {
   try {
