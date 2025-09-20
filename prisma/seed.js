@@ -12,6 +12,7 @@ async function main() {
       address: '123 Main St, Fredericton',
       incoming_dollar_value: 10.0,
       email: 'info@frederictoncommunitykitchen.com',
+      mealsvalue: 10.0,
     },
   });
   const org2 = await prisma.organization.upsert({
@@ -22,60 +23,128 @@ async function main() {
       address: '456 King St, Saint John',
       incoming_dollar_value: 8.0,
       email: 'info@saintjohnfoodbank.com',
+      mealsvalue: 8.0,
     },
   });
 
-  // Create Modules
-  const modules = await Promise.all([
+  // Create Modules for Fredericton Community Kitchen (org1)
+  const modulesOrg1 = await Promise.all([
     prisma.module.upsert({
-      where: { name: 'Donation Management' },
+      where: { name_organizationId: { name: 'Donation Management', organizationId: org1.id } },
       update: {},
       create: {
         name: 'Donation Management',
         description: 'Manage donations and food collection',
+        organizationId: org1.id,
       },
     }),
     prisma.module.upsert({
-      where: { name: 'Meal Counting' },
+      where: { name_organizationId: { name: 'Meal Counting', organizationId: org1.id } },
       update: {},
       create: {
         name: 'Meal Counting',
         description: 'Track and manage meal counts for shifts',
+        organizationId: org1.id,
       },
     }),
     prisma.module.upsert({
-      where: { name: 'Volunteer Meals Counting' },
+      where: { name_organizationId: { name: 'Volunteer Meals Counting', organizationId: org1.id } },
       update: {},
       create: {
         name: 'Volunteer Meals Counting',
         description: 'Volunteers can count meals during their shifts',
+        organizationId: org1.id,
       },
     }),
     prisma.module.upsert({
-      where: { name: 'Volunteer Meal counting sub module' },
+      where: { name_organizationId: { name: 'Volunteer Meal counting sub module', organizationId: org1.id } },
       update: {},
       create: {
         name: 'Volunteer Meal counting sub module',
         description: 'Sub-module for meal counting during shift checkout',
+        organizationId: org1.id,
       },
     }),
     prisma.module.upsert({
-      where: { name: 'Shift Management' },
+      where: { name_organizationId: { name: 'Shift Management', organizationId: org1.id } },
       update: {},
       create: {
         name: 'Shift Management',
         description: 'Manage volunteer shifts and distribution',
+        organizationId: org1.id,
       },
     }),
     prisma.module.upsert({
-      where: { name: 'User Management' },
+      where: { name_organizationId: { name: 'User Management', organizationId: org1.id } },
       update: {},
       create: {
         name: 'User Management',
         description: 'Manage group check-ins and user permissions',
+        organizationId: org1.id,
       },
     }),
   ]);
+
+  // Create Modules for Saint John Food Bank (org2)
+  const modulesOrg2 = await Promise.all([
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'Donation Management', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'Donation Management',
+        description: 'Manage donations and food collection',
+        organizationId: org2.id,
+      },
+    }),
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'Meal Counting', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'Meal Counting',
+        description: 'Track and manage meal counts for shifts',
+        organizationId: org2.id,
+      },
+    }),
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'Volunteer Meals Counting', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'Volunteer Meals Counting',
+        description: 'Volunteers can count meals during their shifts',
+        organizationId: org2.id,
+      },
+    }),
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'Volunteer Meal counting sub module', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'Volunteer Meal counting sub module',
+        description: 'Sub-module for meal counting during shift checkout',
+        organizationId: org2.id,
+      },
+    }),
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'Shift Management', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'Shift Management',
+        description: 'Manage volunteer shifts and distribution',
+        organizationId: org2.id,
+      },
+    }),
+    prisma.module.upsert({
+      where: { name_organizationId: { name: 'User Management', organizationId: org2.id } },
+      update: {},
+      create: {
+        name: 'User Management',
+        description: 'Manage group check-ins and user permissions',
+        organizationId: org2.id,
+      },
+    }),
+  ]);
+
+  // Combine all modules for easier reference
+  const allModules = [...modulesOrg1, ...modulesOrg2];
 
   // Create or fetch Shift Categories for org1
   const mealProgram = await prisma.shiftCategory.upsert({
@@ -128,12 +197,57 @@ async function main() {
     skipDuplicates: true,
   });
 
-  // Create Donors
-  await prisma.donor.createMany({
+  // Create Donation Locations (Primary locations like Walmart, Costco, Sobeys)
+  await prisma.donationLocation.createMany({
     data: [
       { name: 'Walmart', location: 'Fredericton', contactInfo: 'walmart@example.com', kitchenId: org1.id },
       { name: 'Sobeys', location: 'Fredericton', contactInfo: 'sobeys@example.com', kitchenId: org1.id },
       { name: 'Costco', location: 'Saint John', contactInfo: 'costco@example.com', kitchenId: org2.id },
+      { name: 'Superstore', location: 'Fredericton', contactInfo: 'superstore@example.com', kitchenId: org1.id },
+      { name: 'No Frills', location: 'Saint John', contactInfo: 'nofrills@example.com', kitchenId: org2.id },
+    ],
+    skipDuplicates: true,
+  });
+
+  // Create Individual Donors (Optional individual donors)
+  await prisma.donor.createMany({
+    data: [
+      { 
+        firstName: 'John', 
+        lastName: 'Smith', 
+        email: 'john.smith@email.com', 
+        phoneNumber: '506-555-0101',
+        organizationName: 'Smith Family Foundation',
+        donorType: 'Individual',
+        kitchenId: org1.id 
+      },
+      { 
+        firstName: 'Sarah', 
+        lastName: 'Johnson', 
+        email: 'sarah.johnson@email.com', 
+        phoneNumber: '506-555-0102',
+        organizationName: null,
+        donorType: 'Individual',
+        kitchenId: org1.id 
+      },
+      { 
+        firstName: 'Mike', 
+        lastName: 'Brown', 
+        email: 'mike.brown@email.com', 
+        phoneNumber: '506-555-0103',
+        organizationName: 'Brown Enterprises',
+        donorType: 'Organization',
+        kitchenId: org2.id 
+      },
+      { 
+        firstName: 'Lisa', 
+        lastName: 'Davis', 
+        email: 'lisa.davis@email.com', 
+        phoneNumber: '506-555-0104',
+        organizationName: null,
+        donorType: 'Individual',
+        kitchenId: org2.id 
+      },
     ],
     skipDuplicates: true,
   });
@@ -360,8 +474,8 @@ async function main() {
     }
   }
 
-  // Create module permissions for admin user (full access to all modules)
-  for (const module of modules) {
+  // Create module permissions for admin user (full access to all modules for org1)
+  for (const module of modulesOrg1) {
     await prisma.userModulePermission.upsert({
       where: {
         userId_organizationId_moduleId: {
@@ -383,7 +497,7 @@ async function main() {
   // Create module permissions for volunteer users (limited access)
   for (const user of createdUsers) {
     // Volunteers get access to Donation Management, Meal Counting, Volunteer Meals Counting, Volunteer Meal counting sub module, and Shift Management
-    const volunteerModules = modules.filter(m => 
+    const volunteerModules = modulesOrg1.filter(m => 
       m.name === 'Donation Management' || 
       m.name === 'Meal Counting' || 
       m.name === 'Volunteer Meals Counting' || 
@@ -493,6 +607,9 @@ async function main() {
   console.log('Seed data created successfully!');
   console.log('Admin user: raj@gmail.com / raj');
   console.log('Volunteer users: volunteer1@gmail.com / volunteer1, volunteer2@gmail.com / volunteer2, volunteer3@gmail.com / volunteer3');
+  console.log('Donation Locations: Walmart, Sobeys, Costco, Superstore, No Frills');
+  console.log('Individual Donors: John Smith, Sarah Johnson, Mike Brown, Lisa Davis');
+  console.log('Modules: Created organization-specific modules for both organizations');
   console.log('Terms & Conditions: Created for both organizations');
   console.log('User Agreements: Created for all volunteer users');
 }

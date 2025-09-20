@@ -1519,12 +1519,42 @@ app.post('/api/my-shifts/checkout', async (req, res) => {
   }
 });
 
-// Get all donors
-app.get('/api/donors', async (req, res) => {
+// Get all donation locations (renamed from donors)
+app.get('/api/donation-locations', async (req, res) => {
   try {
-    const donors = await prisma.donor.findMany({
+    const { kitchenId } = req.query;
+    const where = kitchenId ? { kitchenId: parseInt(kitchenId) } : {};
+    
+    const donationLocations = await prisma.donationLocation.findMany({
+      where,
       select: { id: true, name: true, location: true, contactInfo: true, kitchenId: true },
       orderBy: { name: 'asc' },
+    });
+    res.json(donationLocations);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch donation locations', details: err.message });
+  }
+});
+
+// Get all individual donors
+app.get('/api/donors', async (req, res) => {
+  try {
+    const { kitchenId } = req.query;
+    const where = kitchenId ? { kitchenId: parseInt(kitchenId) } : {};
+    
+    const donors = await prisma.donor.findMany({
+      where,
+      select: { 
+        id: true, 
+        firstName: true, 
+        lastName: true, 
+        email: true, 
+        phoneNumber: true, 
+        organizationName: true, 
+        donorType: true, 
+        kitchenId: true 
+      },
+      orderBy: { firstName: 'asc' },
     });
     res.json(donors);
   } catch (err) {
@@ -1532,8 +1562,8 @@ app.get('/api/donors', async (req, res) => {
   }
 });
 
-// Create new donor
-app.post('/api/donors', async (req, res) => {
+// Create new donation location
+app.post('/api/donation-locations', async (req, res) => {
   try {
     const { name, location, contactInfo, kitchenId } = req.body;
     
@@ -1541,12 +1571,47 @@ app.post('/api/donors', async (req, res) => {
       return res.status(400).json({ error: 'name and kitchenId are required' });
     }
 
-    // Check if donor with same name already exists for this kitchen/org
-    const existingDonor = await prisma.donor.findFirst({
+    // Check if donation location with same name already exists for this kitchen/org
+    const existingLocation = await prisma.donationLocation.findFirst({
       where: { name, kitchenId: parseInt(kitchenId) },
     });
-    if (existingDonor) {
-      return res.status(409).json({ error: 'A donor with this name already exists for this organization' });
+    if (existingLocation) {
+      return res.status(409).json({ error: 'A donation location with this name already exists for this organization' });
+    }
+
+    // Verify the kitchen/organization exists
+    const organization = await prisma.organization.findUnique({
+      where: { id: parseInt(kitchenId) },
+    });
+    
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const donationLocation = await prisma.donationLocation.create({
+      data: {
+        name,
+        location: location || null,
+        contactInfo: contactInfo || null,
+        kitchenId: parseInt(kitchenId),
+      },
+      select: { id: true, name: true, location: true, contactInfo: true, kitchenId: true },
+    });
+
+    res.status(201).json(donationLocation);
+  } catch (err) {
+    console.error('Error creating donation location:', err);
+    res.status(500).json({ error: 'Failed to create donation location', details: err.message });
+  }
+});
+
+// Create new individual donor
+app.post('/api/donors', async (req, res) => {
+  try {
+    const { firstName, lastName, email, phoneNumber, organizationName, donorType, kitchenId } = req.body;
+    
+    if (!kitchenId) {
+      return res.status(400).json({ error: 'kitchenId is required' });
     }
 
     // Verify the kitchen/organization exists
@@ -1560,12 +1625,24 @@ app.post('/api/donors', async (req, res) => {
 
     const donor = await prisma.donor.create({
       data: {
-        name,
-        location: location || null,
-        contactInfo: contactInfo || null,
+        firstName: firstName || null,
+        lastName: lastName || null,
+        email: email || null,
+        phoneNumber: phoneNumber || null,
+        organizationName: organizationName || null,
+        donorType: donorType || 'Individual',
         kitchenId: parseInt(kitchenId),
       },
-      select: { id: true, name: true, location: true, contactInfo: true, kitchenId: true },
+      select: { 
+        id: true, 
+        firstName: true, 
+        lastName: true, 
+        email: true, 
+        phoneNumber: true, 
+        organizationName: true, 
+        donorType: true, 
+        kitchenId: true 
+      },
     });
 
     res.status(201).json(donor);
@@ -1619,13 +1696,13 @@ app.post('/api/donation-categories', async (req, res) => {
   }
 });
 
-// POST /api/donations - create donation entries for a shift and donor
+// POST /api/donations - create donation entries for a shift and donation location
 app.post('/api/donations', async (req, res) => {
   try {
-    const { shiftId, donorId, entries, shiftSignupId } = req.body;
-    console.log('Donations request:', { shiftId, donorId, entries, shiftSignupId });
-    if (!shiftId || !donorId || !Array.isArray(entries) || entries.length === 0) {
-      return res.status(400).json({ error: 'shiftId, donorId, and entries are required' });
+    const { shiftId, donationLocationId, donorId, entries, shiftSignupId } = req.body;
+    console.log('Donations request:', { shiftId, donationLocationId, donorId, entries, shiftSignupId });
+    if (!shiftId || !donationLocationId || !Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'shiftId, donationLocationId, and entries are required' });
     }
     // Find the shift to get organizationId
     const shift = await prisma.shift.findUnique({ where: { id: parseInt(shiftId) } });
@@ -1640,7 +1717,8 @@ app.post('/api/donations', async (req, res) => {
       data: {
         shiftId: parseInt(shiftId),
         organizationId,
-        donorId: parseInt(donorId),
+        donationLocationId: parseInt(donationLocationId),
+        donorId: donorId ? parseInt(donorId) : null,
         summary: totalWeight,
         ...(shiftSignupId ? { shiftSignupId: parseInt(shiftSignupId) } : {}),
       },
@@ -2536,7 +2614,7 @@ app.get('/api/admin/user-shift-status', async (req, res) => {
   }
 });
 
-// Get all donations for a shift, with donor and category info (for summary modal)
+// Get all donations for a shift, with donation location and category info (for summary modal)
 app.get('/api/donations/by-shift', async (req, res) => {
   try {
     const { shiftId, shiftSignupId } = req.query;
@@ -2548,18 +2626,20 @@ app.get('/api/donations/by-shift', async (req, res) => {
     const donations = await prisma.donation.findMany({
       where,
       include: {
+        donationLocation: true,
         donor: true,
         items: { include: { category: true } }
       },
       orderBy: { createdAt: 'asc' }
     });
 
-    // Flatten for frontend: one entry per donor/category/weight
+    // Flatten for frontend: one entry per donation location/category/weight
     const result = [];
     for (const donation of donations) {
       for (const item of donation.items) {
         result.push({
-          donorName: donation.donor.name,
+          donationLocationName: donation.donationLocation.name,
+          donorName: donation.donor ? `${donation.donor.firstName} ${donation.donor.lastName}` : null,
           categoryName: item.category.name,
           weightKg: item.weightKg,
           createdAt: donation.createdAt
@@ -2613,6 +2693,7 @@ app.get('/api/donations/user/:userId', async (req, res) => {
         ...dateFilter
       },
       include: {
+        donationLocation: true,
         donor: true,
         shift: {
           include: {

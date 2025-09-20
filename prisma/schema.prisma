@@ -17,7 +17,9 @@ model Organization {
   mealsvalue            Decimal?             @default(10) @db.Decimal(10, 2)
   donations             Donation[]
   categories            DonationCategory[]
+  donationLocations     DonationLocation[]
   donors                Donor[]
+  modules               Module[]
   recurringShifts       RecurringShift[]
   shifts                Shift[]
   shiftCategories       ShiftCategory[]
@@ -119,7 +121,7 @@ model ShiftSignup {
   user        User       @relation(fields: [userId], references: [id])
 }
 
-model Donor {
+model DonationLocation {
   id          Int          @id @default(autoincrement())
   name        String       @unique
   location    String?
@@ -129,19 +131,34 @@ model Donor {
   kitchen     Organization @relation(fields: [kitchenId], references: [id])
 }
 
+model Donor {
+  id              Int          @id @default(autoincrement())
+  firstName       String?
+  lastName        String?
+  email           String?
+  phoneNumber     String?
+  organizationName String?
+  donorType       String
+  kitchenId       Int
+  donations       Donation[]
+  kitchen         Organization @relation(fields: [kitchenId], references: [id])
+}
+
 model Donation {
-  id             Int            @id @default(autoincrement())
-  shiftId        Int?
-  organizationId Int
-  donorId        Int
-  shiftSignupId  Int?
-  createdAt      DateTime       @default(now())
-  summary        Float
-  donor          Donor          @relation(fields: [donorId], references: [id])
-  organization   Organization   @relation(fields: [organizationId], references: [id])
-  shift          Shift?         @relation(fields: [shiftId], references: [id])
-  shiftSignup    ShiftSignup?   @relation(fields: [shiftSignupId], references: [id])
-  items          DonationItem[]
+  id                 Int            @id @default(autoincrement())
+  shiftId            Int?
+  organizationId     Int
+  donationLocationId Int
+  donorId            Int?
+  shiftSignupId      Int?
+  createdAt          DateTime       @default(now())
+  summary            Float
+  donationLocation   DonationLocation @relation(fields: [donationLocationId], references: [id])
+  donor              Donor?         @relation(fields: [donorId], references: [id])
+  organization       Organization   @relation(fields: [organizationId], references: [id])
+  shift              Shift?         @relation(fields: [shiftId], references: [id])
+  shiftSignup        ShiftSignup?   @relation(fields: [shiftSignupId], references: [id])
+  items              DonationItem[]
 }
 
 model DonationCategory {
@@ -195,10 +212,14 @@ model WeighingCategory {
 
 model Module {
   id                    Int                     @id @default(autoincrement())
-  name                  String                  @unique
+  name                  String
   description           String?
+  organizationId        Int
   RoleDefaultPermission RoleDefaultPermission[]
   permissions           UserModulePermission[]
+  organization          Organization            @relation(fields: [organizationId], references: [id])
+
+  @@unique([name, organizationId])
 }
 
 model UserModulePermission {
