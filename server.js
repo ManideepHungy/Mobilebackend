@@ -489,6 +489,7 @@ app.post('/api/auth/register-step2', async (req, res) => {
 // Login endpoint
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
+  console.log('Login endpoint hit with email:', email);
   if (!email || !password) {
     return res.status(400).json({ error: 'Missing email or password' });
   }
@@ -498,6 +499,7 @@ app.post('/api/auth/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    console.log('Login successful for user:', user.id);
     res.json({ 
       token, 
       user: { 
