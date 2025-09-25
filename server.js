@@ -2655,11 +2655,11 @@ app.get('/api/donations/by-shift', async (req, res) => {
   }
 });
 
-// Get donations by user with date filtering
+// Get donations by user with date filtering and organization filtering
 app.get('/api/donations/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { date, week } = req.query;
+    const { date, week, organizationId } = req.query;
     
     if (!userId) return res.status(400).json({ error: 'userId is required' });
 
@@ -2687,12 +2687,21 @@ app.get('/api/donations/user/:userId', async (req, res) => {
       };
     }
 
+    // Build organization filter
+    let orgFilter = {};
+    if (organizationId) {
+      orgFilter = {
+        organizationId: parseInt(organizationId)
+      };
+    }
+
     const donations = await prisma.donation.findMany({
       where: {
         shiftSignup: {
           userId: parseInt(userId)
         },
-        ...dateFilter
+        ...dateFilter,
+        ...orgFilter
       },
       include: {
         donationLocation: true,
@@ -2716,6 +2725,64 @@ app.get('/api/donations/user/:userId', async (req, res) => {
   } catch (err) {
     console.error('Error fetching user donations:', err);
     res.status(500).json({ error: 'Failed to fetch user donations', details: err.message });
+  }
+});
+
+// PUT /api/donations/:donationId - update donation entries
+app.put('/api/donations/:donationId', async (req, res) => {
+  try {
+    const { donationId } = req.params;
+    const { entries } = req.body;
+    
+    if (!donationId || !Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'donationId and entries are required' });
+    }
+
+    // Find the existing donation
+    const existingDonation = await prisma.donation.findUnique({
+      where: { id: parseInt(donationId) },
+      include: { items: true }
+    });
+
+    if (!existingDonation) {
+      return res.status(404).json({ error: 'Donation not found' });
+    }
+
+    // Calculate new total weight
+    const totalWeight = entries.reduce((sum, entry) => sum + entry.weightKg, 0);
+
+    // Update the donation summary
+    await prisma.donation.update({
+      where: { id: parseInt(donationId) },
+      data: { summary: totalWeight }
+    });
+
+    // Delete existing donation items
+    await prisma.donationItem.deleteMany({
+      where: { donationId: parseInt(donationId) }
+    });
+
+    // Create new donation items
+    const donationItems = await Promise.all(
+      entries.map(entry =>
+        prisma.donationItem.create({
+          data: {
+            donationId: parseInt(donationId),
+            categoryId: entry.categoryId,
+            weightKg: entry.weightKg,
+          },
+        })
+      )
+    );
+
+    res.json({ 
+      message: 'Donation updated successfully', 
+      donationId: parseInt(donationId), 
+      items: donationItems 
+    });
+  } catch (err) {
+    console.error('Error updating donation:', err);
+    res.status(500).json({ error: 'Failed to update donation', details: err.message });
   }
 });
 
